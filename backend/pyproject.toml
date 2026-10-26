@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evidence-backed-knowledge-assistant-api"
+version = "0.1.0"
+description = "Local-first evidence-backed knowledge assistant API"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic==1.16.1",
+    "fastapi==0.115.12",
+    "pgvector==0.4.1",
+    "psycopg[binary]==3.2.10",
+    "pydantic-settings==2.9.1",
+    "sqlalchemy==2.0.41",
+    "uvicorn[standard]==0.34.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx==0.28.1",
+    "mypy==1.16.0",
+    "pytest==8.4.0",
+    "ruff==0.11.13",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "."
+files = ["app"]
