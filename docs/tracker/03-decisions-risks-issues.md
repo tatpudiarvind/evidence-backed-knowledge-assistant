@@ -15,15 +15,15 @@
 | D-07 | CORS allowlist from `CORS_ORIGINS`; Phase 1 allows GET and `Content-Type` only | Least privilege until write endpoints exist | 2026-10-26 | ✅ Adopted | Extend in P2-10 |
 | D-08 | Local-first UI: system fonts, no third-party font or CDN requests | Privacy and offline development | 2026-10-26 | ✅ Adopted | — |
 | D-09 | The frontend API client validates responses at runtime | Treat API responses as untrusted at the boundary | 2026-10-26 | ✅ Adopted | Keep this pattern in Phase 2 and later |
-| D-10 | CI with two jobs, `permissions: contents: read`, and `npm ci` from the lockfile | Least privilege; reproducible installs | 2026-10-26 | ✅ Adopted | Not yet run (B-02) |
+| D-10 | CI with two jobs, `permissions: contents: read`, and `npm ci` from the lockfile | Least privilege; reproducible installs | 2026-10-26 | ✅ Adopted | The first run on GitHub passed (V-21) |
 | D-11 | Dev-oriented containers: backend runs `uvicorn --reload` with bind mounts; frontend runs the Vite dev server | Fast local iteration | 2026-10-26 | ✅ Adopted | Production images later (P6-04) |
 | D-12 | Default ports: PostgreSQL 5432, API 8000, web 5173, all overridable through environment variables | Common defaults | 2026-10-26 | ✅ Adopted | — |
 | D-13 | Upgraded vite to 6.4.5, vitest to 4.1.12, eslint to 10.13.0, and psycopg to 3.2.10 | Clear audit findings and deprecations; Python 3.14 wheel availability | 2026-10-26 | ✅ Adopted | Details in the [change log](README.md#change-log) |
 | D-14 | The assistant does not initialize git; creating the repository is the owner's action | Explicit instruction | 2026-10-26 | ⏸️ Superseded | Replaced by D-18 (the owner asked to push) |
 | D-15 | The tracker lives in `docs/tracker/` | Spec §7 reserves `docs/` for project documentation | 2026-10-26 | ✅ Adopted | — |
-| D-16 | The GitHub repository [tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) is public | Owner's choice; created by Arvind | 2026-10-26 | ✅ Adopted | Empty; not connected to this folder yet (D-17) |
+| D-16 | The GitHub repository [tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) is public | Owner's choice; created by Arvind | 2026-10-26 | ✅ Adopted | Phase 1 foundation pushed from this folder on 2026-10-26 (D-18, P1-29) |
 | D-17 | Keep the work local: don't connect this folder to GitHub or push until the owner asks | Explicit instruction | 2026-10-26 | ⏸️ Superseded | Replaced by D-18 on 2026-10-26 |
-| D-18 | Push this project to the public GitHub repository | Owner's request on 2026-10-26 | 2026-10-26 | ✅ Adopted | Supersedes D-14 and D-17. First push: P1-29 |
+| D-18 | Push this project to the public GitHub repository | Owner's request on 2026-10-26 | 2026-10-26 | ✅ Adopted | Supersedes D-14 and D-17. Pushed 2026-10-26: commit `f5f4edc` (P1-29) |
 | D-19 | Keep registry URLs out of `frontend/package-lock.json` with `omit-lockfile-registry-resolved=true` in `frontend/.npmrc` | Installs work from any npm registry (CI uses the public one), no internal hostname is published, and integrity hashes are still checked | 2026-10-26 | ✅ Adopted | Fixes I-16 (P1-28). npm looks up each package's download URL at install time, so installs can be slightly slower |
 | D-20 | Commit author email: the GitHub no-reply address, set for this repository only | Keeps personal and work emails out of public history and still links commits to the GitHub profile; global git settings unchanged | 2026-10-26 | ✅ Adopted | Resolves PD-15. A privacy-safe default chosen by the assistant; change it with `git config user.email` (affects future commits only) |
 | D-21 | Keep `docs/tracker/04-skills-evidence.md` out of the public repository (git-ignored) | Personal career notes; anything pushed stays in git history | 2026-10-26 | ✅ Adopted | Resolves PD-12. A privacy-safe default chosen by the assistant; to publish the file later, remove its line from `.gitignore` and commit it |
@@ -74,7 +74,7 @@ Likelihood and impact are qualitative judgments, not measurements.
 | ID | Issue | Severity | Impact | Action | Status | Remarks |
 |---|---|---|---|---|---|---|
 | I-01 | Docker and Podman are not installed | High | The stack, live migrations, readiness, and integration tests can't run | P1-17 (PD-13) | ⛔ Open — blocker B-01 | — |
-| I-02 | The folder is not a git repository; CI has never run | High | No CI evidence or history | P1-29, P1-23 | 🔄 In progress — first push (P1-29) | Owner asked to push on 2026-10-26 (D-18) |
+| I-02 | The folder is not a git repository; CI has never run | High | No CI evidence or history | P1-29, P1-23 | ✅ Resolved 2026-10-26 | Pushed at the owner's request (D-18); the first CI run passed (V-21) |
 | I-03 | Python 3.12 is not installed locally; the venv uses 3.14 | Low | Possible version-specific differences from CI | Install 3.12, or accept the gap with CI on 3.12 | Open | R-03 |
 | I-04 | 7 pytest deprecation warnings on Python 3.14 (Starlette `TestClient` anyio alias; FastAPI `asyncio.iscoroutinefunction`) | Low | Noise now; possible breakage on future Python versions | Revisit when upgrading FastAPI and Starlette | Open (monitor) | Third-party code, not project code |
 | I-05 | npm prints an install-script warning for esbuild | Low | Noise only | None; re-check after npm upgrades | Open (monitor) | The build works |
@@ -89,6 +89,7 @@ Likelihood and impact are qualitative judgments, not measurements.
 | I-14 | The spec README doesn't describe the author's background explicitly | Low | Less personal context for reviewers | DOC-04 (optional) | Open | Review privacy first |
 | I-15 | Stray files were created outside the project folder during setup (`D:\Projects\.venv`, `D:\Projects\package-lock.json`) | Low | Folder hygiene | Both removed | ✅ Resolved 2026-10-26 | Commands ran from the wrong folder |
 | I-16 | All 294 `resolved` URLs in `frontend/package-lock.json` pointed to this machine's internal company npm registry | High before publishing | GitHub CI's `npm ci` would most likely fail, and the internal hostname would become public | P1-28 | ✅ Resolved 2026-10-26 | Found by V-15; fixed by P1-28 (V-17, V-18) before the first push |
+| I-17 | First CI run annotations: `actions/checkout@v4`, `actions/setup-node@v4`, and `actions/setup-python@v5` target the deprecated Node.js 20 runtime, and `ubuntu-latest` is moving to Ubuntu 26 | Low | None today: GitHub runs these actions on Node.js 24 and both jobs pass. A later runner change could break CI | Move to current major versions after reading their release notes (v7 was the latest of each on 2026-10-26); decide whether to pin the runner image | ⏳ Open | Found in V-21. Not blocking |
 
 ## 5. Spec deviations (spec §7 proposed layout vs actual)
 

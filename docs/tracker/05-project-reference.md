@@ -12,7 +12,7 @@ Reference data for the current code. Update it whenever files, dependencies, or 
 | `.env.example` | Template for local configuration | ✅ | Copy to `.env`; never commit `.env` |
 | `.gitignore` | Ignores secrets, virtual environments, caches, build output, local data | ✅ | Also keeps `docs/tracker/04-skills-evidence.md` local (D-21) |
 | `compose.yaml` | Local stack: `db`, `backend`, `frontend` | 🟡 | Never run (B-01) |
-| `.github/workflows/ci.yml` | CI for backend and frontend | 🟡 | Never run (B-02) |
+| `.github/workflows/ci.yml` | CI for backend and frontend | ✅ | The first run on GitHub passed (V-21); action-version warnings (I-17) |
 | `docs/tracker/` | This tracker (6 files) | ✅ | `04-skills-evidence.md` is local only and not published (D-21) |
 | `backend/pyproject.toml` | Package metadata, pinned dependencies, Ruff/mypy/pytest configuration | ✅ | — |
 | `backend/Dockerfile`, `backend/.dockerignore` | Dev image (Python 3.12) | 🟡 | Never built |
@@ -150,16 +150,16 @@ Backend commands call the venv interpreter directly, so the venv doesn't need to
 | Start the stack | `Copy-Item .env.example .env`, then `docker compose up --build -d` | Project root | ⛔ Blocked | B-01 |
 | Apply migrations | `docker compose run --rm backend alembic upgrade head` | Project root | ⛔ Blocked | B-01 |
 | Stop the stack | `docker compose down` | Project root | ⛔ Blocked | Add `-v` only to delete the local database volume |
-| First push | `git init -b main`, `git add .`, review `git status`, `git commit`, `git remote add origin https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant.git`, `git push -u origin main` | Project root | 🔄 In progress | Owner asked to push (D-18); [pre-push checklist](README.md#pre-push-checklist) done |
-| Push later changes | `git status`, `git add <files>`, `git commit -m "<message>"`, `git push` | Project root | ⏳ Not run yet | Run the [pre-push checklist](README.md#pre-push-checklist) before every push; CI runs on every push |
+| First push | `git init -b main`, `git add .`, review `git status`, `git commit`, `git remote add origin https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant.git`, `git push -u origin main` | Project root | ✅ Done 2026-10-26 | Commit `f5f4edc` (D-18, P1-29). Commits use the no-reply address set for this repository only (D-20) |
+| Push later changes | `git status`, `git add <files>`, `git commit -m "<message>"`, `git push` | Project root | ✅ Used 2026-10-26 | Run the [pre-push checklist](README.md#pre-push-checklist) before every push; CI runs on every push |
 
 ## 9. Repository
 
 | Item | Value | Status | Remarks |
 |---|---|---|---|
 | URL | [github.com/tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) | ✅ Created | Public (D-16) |
-| Contents | First push from this folder in progress | 🔄 In progress | D-18, P1-29. `04-skills-evidence.md` is not published (D-21) |
+| Contents | Specification, Phase 1 foundation, and tracker | ✅ Pushed 2026-10-26 | First commit `f5f4edc` (D-18, P1-29). `04-skills-evidence.md` is not published (D-21) |
 | Default branch | `main` | ✅ | Matches `git init -b main` above |
-| GitHub Actions | Enabled; all actions allowed | ✅ | The CI workflow runs after the first push (NV-05, P1-23) |
+| GitHub Actions | Enabled; all actions allowed | ✅ | CI runs on every push and pull request; the first run passed (V-21) |
 | License | None | ⏳ Open | PD-16 |
 | Description | Set on GitHub; describes citations and abstention in the present tense | ⏳ Review | Your text, left unchanged. Those features aren't built yet (Phase 4); consider rewording it, for example as "in progress" (pre-push checklist item 5) |

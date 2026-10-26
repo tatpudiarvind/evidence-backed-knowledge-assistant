@@ -3,11 +3,11 @@
 | Field | Value | Remarks |
 |---|---|---|
 | Last updated | 2026-10-26 | Update at the end of every work session |
-| Current stage | Phase 1 — repository and local foundation | Code and local checks are in place; the container stack and CI have never been run |
+| Current stage | Phase 1 — repository and local foundation | Code, local checks, and GitHub Actions CI pass (V-21); the container stack has never been run (B-01) |
 | Source of truth | [Project specification](../../README.md) | This tracker records progress against the spec; it does not replace it |
-| GitHub repository | [tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) | Created 2026-10-26 (public). First push from this folder on 2026-10-26 (D-18, P1-29). Personal notes stay local (D-21) |
+| GitHub repository | [tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) | Created 2026-10-26 (public). Phase 1 foundation pushed 2026-10-26 (commit `f5f4edc`, P1-29); CI passes (V-21). Personal notes stay local (D-21) |
 | AI/RAG features | None yet | By design: Phase 1 is foundation only |
-| Local checks (2026-10-26) | 18 passed, 2 failed | Open failure: `ruff format --check` on one file (I-09). The registry URLs in `package-lock.json` (V-15) were fixed before the push (V-17). Details in [02-verification-log.md](02-verification-log.md) |
+| Checks (2026-10-26) | 19 passed, 2 failed | Includes the first GitHub Actions run (V-21). Open failure: `ruff format --check` on one file (I-09). The registry URLs in `package-lock.json` (V-15) were fixed before the push (V-17). Details in [02-verification-log.md](02-verification-log.md) |
 | Measured metrics | None | Evaluation is Phase 5; never publish unmeasured numbers |
 | Cloud resources / paid APIs | None | The default path stays local and free |
 
@@ -29,21 +29,21 @@ Counts come from [01-task-tracker.md](01-task-tracker.md). They are unweighted t
 | Phase | Focus | Status | Tasks | ✅ | 🟡 | 🔄 | ⏳ | ⛔ | ⏸️ | Definition of done met? | Remarks |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | P0 | Confirm environment and decisions | 🔄 In progress | 7 | 1 | 0 | 0 | 6 | 0 | 0 | ❌ No | Tool versions checked; hardware check and corpus/auth/model decisions still open |
-| P1 | Repository and local foundation | 🔄 In progress | 29 | 13 | 5 | 1 | 7 | 3 | 0 | ❌ No | Code and local checks pass; first push in progress (P1-29). "Clean checkout starts locally and CI passes" not yet shown (B-01, B-02) |
+| P1 | Repository and local foundation | 🔄 In progress | 29 | 16 | 4 | 0 | 6 | 3 | 0 | ❌ No | Code, local checks, and CI pass (V-21). "Clean checkout starts locally" not yet shown: the container stack has never run (B-01) |
 | P2 | Workspace and document lifecycle | ⏳ Not started | 13 | 0 | 0 | 0 | 13 | 0 | 0 | ❌ No | Start after Phase 1 is done and the auth mode is decided (PD-01) |
 | P3 | Ingestion and semantic indexing | ⏳ Not started | 12 | 0 | 0 | 0 | 12 | 0 | 0 | ❌ No | Needs corpus, embedding model, and PDF library decisions |
 | P4 | Grounded question answering | ⏳ Not started | 10 | 0 | 0 | 0 | 10 | 0 | 0 | ❌ No | Needs the local LLM runtime decision (PD-05) |
 | P5 | Evaluation and hardening | ⏳ Not started | 8 | 0 | 0 | 0 | 8 | 0 | 0 | ❌ No | No evaluation results exist yet |
 | P6 | Portfolio polish and optional deployment | ⏳ Not started | 6 | 0 | 0 | 0 | 4 | 0 | 2 | ❌ No | Cloud deployment is optional and deferred |
 | DOC | Documentation and tracking | 🔄 In progress | 5 | 2 | 0 | 1 | 2 | 0 | 0 | — | Spec and tracker done; upkeep ongoing |
-| **Total** | | | **90** | **16** | **5** | **2** | **62** | **3** | **2** | | |
+| **Total** | | | **90** | **19** | **4** | **1** | **61** | **3** | **2** | | |
 
 ## Blockers
 
 | ID | Blocker | Blocks | How to unblock | Who | Status | Remarks |
 |---|---|---|---|---|---|---|
 | B-01 | No container runtime: Docker and Podman were not found | P1-18 – P1-20, P2-13, and all live-database work | Install Docker Desktop, Rancher Desktop, or Podman (PD-13), then run the README quickstart | Arvind | ⛔ Open | Check license terms and IT policy on a managed machine. Native PostgreSQL + pgvector is a harder fallback on Windows |
-| B-02 | CI has never run on GitHub: this folder was not a git repository or connected to the repository | P1-23, P5-05 | Push (P1-29), then confirm the first CI run passes (P1-23) | Implementation session | 🔄 In progress | Owner asked to push on 2026-10-26 (D-18) |
+| B-02 | CI has never run on GitHub: this folder was not a git repository or connected to the repository | P1-23, P5-05 | Push (P1-29), then confirm the first CI run passes (P1-23) | Implementation session | ✅ Resolved 2026-10-26 | Pushed commit `f5f4edc`; the first CI run passed (V-21) |
 
 ## Pre-push checklist
 
@@ -65,8 +65,8 @@ The GitHub repository is public, and anything pushed stays in git history. Run t
 |---|---|---|---|---|
 | 1 | Install a permitted container runtime | PD-13, P1-17 | Arvind | Unblocks most remaining Phase 1 checks |
 | 2 | Run the quickstart and record the results in [02-verification-log.md](02-verification-log.md) | P1-18 – P1-21 | Arvind or implementation session | Move 🟡 items to ✅ only after a real run |
-| 3 | Push to GitHub and confirm the first CI run passes | P1-29, P1-23 | Implementation session | Owner asked to push on 2026-10-26 (D-18) |
-| 4 | Phase 1 hygiene: formatting and CI format step, backend lock file, pip-audit, devDependencies | P1-24 – P1-27 | Implementation session | Small changes; re-run all checks afterwards |
+| 3 | Choose a license and review the repository description | PD-16 | Arvind | Not blocking. The description presents citations and abstention as built; see pre-push checklist items 4 and 5 |
+| 4 | Phase 1 hygiene: formatting and CI format step, backend lock file, pip-audit, devDependencies, CI action versions | P1-24 – P1-27, I-17 | Implementation session | Small changes; re-run all checks afterwards |
 | 5 | Make the Phase 0 decisions and write down the configuration | P0-02 – P0-07 | Arvind | Needed before Phases 2–4 |
 | 6 | Start Phase 2 | P2-01 onward | Implementation session | Only after the Phase 1 definition of done is met |
 
@@ -108,7 +108,9 @@ The GitHub repository is public, and anything pushed stays in git history. Run t
 | 2026-10-26 | Created this tracker in `docs/tracker/` | ✅ | 6 files |
 | 2026-10-26 | Arvind created the GitHub repository `tatpudiarvind/evidence-backed-knowledge-assistant` (public, empty, Actions enabled) | ✅ | Checked with `gh api`. This folder was intentionally not connected or pushed (D-17) |
 | 2026-10-26 | Pre-push review: `package-lock.json` resolves every package from this machine's internal company npm registry; secret pattern scan found nothing | ❌ 1 / ✅ 1 | Fix the lockfile before the first push (I-16, P1-28) |
+| 2026-10-26 | Updated the tracker: repository status, pre-push checklist, tasks P1-28 and P1-29, decisions D-16 and D-17, pending decisions PD-15 and PD-16, risk R-13, issue I-16 | ✅ | No code or configuration changed |
 | 2026-10-26 | Arvind asked to push the project to GitHub; the assistant chose privacy-safe defaults for the open pre-push decisions | ✅ | Author email: GitHub no-reply address for this repository only (D-20); `04-skills-evidence.md` kept local (D-21); license still open (PD-16) |
 | 2026-10-26 | Made `frontend/package-lock.json` registry-neutral: added `frontend/.npmrc` and regenerated the lockfile | ✅ | 0 registry URLs and unchanged versions (V-17); `npm ci` and all frontend checks pass (V-18); backend checks re-run (V-19) |
 | 2026-10-26 | Initialized git in the project folder and scanned the staged files | ✅ | V-20. First push: P1-29 |
-| 2026-10-26 | Updated the tracker: repository status, pre-push checklist, tasks P1-28 and P1-29, decisions D-16 and D-17, pending decisions PD-15 and PD-16, risk R-13, issue I-16 | ✅ | No code or configuration changed |
+| 2026-10-26 | Pushed the Phase 1 foundation to GitHub: commit `f5f4edc`, 43 files | ✅ | The first CI run passed (V-21); non-blocking annotations logged as I-17 |
+| 2026-10-26 | Updated the tracker after the push: tasks P1-15, P1-23, and P1-29; blocker B-02; issues I-02 and I-17; check V-21 | ✅ | Committed and pushed as a follow-up commit |

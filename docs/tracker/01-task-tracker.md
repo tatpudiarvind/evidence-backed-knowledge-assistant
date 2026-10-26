@@ -20,7 +20,7 @@ Counts are unweighted: a small task and a large one each count as one. Types: Bu
 
 ## Phase 1 — Repository and local foundation
 
-**Definition of done (spec):** a clean checkout starts locally and CI passes without secrets. **Met:** ❌ No — code and local checks pass, but the stack has never run in containers and CI has never run.
+**Definition of done (spec):** a clean checkout starts locally and CI passes without secrets. **Met:** ❌ No — code, local checks, and CI pass without secrets (V-21), but the stack has never run in containers (B-01).
 
 | ID | Task | Type | Status | Depends on | Evidence / output | Remarks |
 |---|---|---|---|---|---|---|
@@ -38,7 +38,7 @@ Counts are unweighted: a small task and a large one each count as one. Types: Bu
 | P1-12 | Docker Compose: `db` (`pgvector/pgvector:0.8.0-pg16` with `pg_isready` health check), `backend`, `frontend` | Build | 🟡 Built, unverified | — | `compose.yaml`; YAML parses with 3 services and 2 volumes (V-14) | Never run: no container runtime (B-01) |
 | P1-13 | Backend Dockerfile (`python:3.12-slim`) and `.dockerignore` | Build | 🟡 Built, unverified | — | `backend/Dockerfile` | Never built. Dev image (installs dev extras); production image is P6-04 |
 | P1-14 | Frontend Dockerfile (`node:22-alpine`, Vite dev server) and `.dockerignore` | Build | 🟡 Built, unverified | P1-09 | `frontend/Dockerfile` | Never built. Dev server only; production image is P6-04 |
-| P1-15 | GitHub Actions CI: backend job (install, Ruff, mypy, pytest) and frontend job (`npm ci`, lint, typecheck, test, build); `permissions: contents: read` | Build | 🟡 Built, unverified | — | `.github/workflows/ci.yml`; YAML parses with 2 jobs (V-14) | Never run: no repository yet (B-02). No format-check or dependency-audit step yet (P1-26, P5-05) |
+| P1-15 | GitHub Actions CI: backend job (install, Ruff, mypy, pytest) and frontend job (`npm ci`, lint, typecheck, test, build); `permissions: contents: read` | Build | ✅ Done | — | `.github/workflows/ci.yml`; YAML parses with 2 jobs (V-14); the first run on GitHub passed (V-21) | No format-check or dependency-audit step yet (P1-26, P5-05). Action versions trigger deprecation warnings (I-17) |
 | P1-16 | Document startup and teardown ("Phase 1 foundation quickstart" in the spec README) | Docs | 🟡 Built, unverified | — | Last section of the [project specification](../../README.md) | Commands not executed yet (B-01) |
 | P1-17 | Install a container runtime that this machine allows | Setup | ⏳ Not started | PD-13 | — | Owner: Arvind. Docker Desktop (check license terms and IT policy), Rancher Desktop, or Podman |
 | P1-18 | Start the stack with `docker compose up --build -d`; confirm all services are healthy | Verify | ⛔ Blocked | P1-17 | — | Blocked by B-01 |
@@ -46,13 +46,13 @@ Counts are unweighted: a small task and a large one each count as one. Types: Bu
 | P1-20 | Confirm `/health/ready` returns 200 with the database up and 503 with it stopped | Verify | ⛔ Blocked | P1-18 | — | Blocked by B-01 |
 | P1-21 | Check the landing page in a real browser (ready and unavailable states, keyboard focus) | Verify | ⏳ Not started | — | — | The unavailable state can be checked now with `npm run dev`; the ready state needs P1-18 |
 | P1-22 | Create the GitHub repository | Setup | ✅ Done | — | [tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant): public and empty; checked with `gh api` on 2026-10-26 | Owner: Arvind (D-16). Connecting this folder and pushing are now P1-29 |
-| P1-23 | First CI run passes on GitHub Actions | Verify | ⏳ Not started | P1-29 | — | Runs automatically on the first push |
+| P1-23 | First CI run passes on GitHub Actions | Verify | ✅ Done | P1-29 | [Run 40378438728](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant/actions/runs/40378438728): `backend` and `frontend` jobs passed (V-21) | Triggered by the first push. Non-blocking annotations logged as I-17 |
 | P1-24 | Add a backend transitive lock file | Build | ⏳ Not started | PD-11 | — | uv is not installed; options are `uv lock` or pip-tools with hashes |
 | P1-25 | Baseline backend dependency audit with pip-audit | Security | ⏳ Not started | — | — | pip-audit is not installed; `npm audit` already shows 0 vulnerabilities (V-13) |
 | P1-26 | Fix formatting drift and add `ruff format --check` to CI | Build | ⏳ Not started | — | V-03 | Found 2026-10-26: `app/core/config.py` would be reformatted (joins a split string). CI runs only `ruff check`, so it would not catch this |
 | P1-27 | Move `vite` and `@vitejs/plugin-react` to `devDependencies` | Build | ⏳ Not started | P1-28 | — | Housekeeping with no functional impact; refresh the lockfile and re-run checks afterwards. Do P1-28 first so the refreshed lockfile stays registry-neutral |
 | P1-28 | Make `frontend/package-lock.json` registry-neutral | Security | ✅ Done | — | `frontend/.npmrc`; lockfile regenerated with 0 `resolved` URLs and unchanged versions (V-17); `npm ci` and all frontend checks pass (V-18) | Fixes I-16 (D-19). Integrity hashes are kept, so installs are still verified |
-| P1-29 | Initialize git locally, connect to the GitHub repository, and push | Setup | 🔄 In progress | P1-22, P1-28, PD-12, PD-15 | — | Owner asked to push on 2026-10-26 (D-18). [Pre-push checklist](README.md#pre-push-checklist) done; author email D-20; personal notes kept local (D-21) |
+| P1-29 | Initialize git locally, connect to the GitHub repository, and push | Setup | ✅ Done | P1-22, P1-28, PD-12, PD-15 | Commit `f5f4edc` (43 files) on `main`; remote `main` matches local (V-20, V-21) | Pushed 2026-10-26 at the owner's request (D-18) after the [pre-push checklist](README.md#pre-push-checklist). Author email D-20; personal notes kept local (D-21) |
 
 ## Phase 2 — Workspace and document lifecycle
 
