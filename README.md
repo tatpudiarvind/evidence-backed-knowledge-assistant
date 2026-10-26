@@ -461,4 +461,8 @@ docker compose up --build -d
 docker compose run --rm backend alembic upgrade head
 ```
 
-Open `http://localhost:5173`; the page reports whether the API and PostgreSQL are ready. The API health endpoints are `http://localhost:8000/health/live` and `http://localhost:8000/health/ready`. Run backend checks from `backend` with `python -m pip install -e ".[dev]"`, `ruff check .`, `mypy app`, and `pytest`; run frontend checks from `frontend` with `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`. Stop local services with `docker compose down`; add `-v` only if you intentionally want to delete the local database volume.
+Open `http://localhost:5173`; the page reports whether the API and PostgreSQL are ready. The API health endpoints are `http://localhost:8000/health/live` and `http://localhost:8000/health/ready`. Backend dependencies are locked in `backend/uv.lock`; install [uv](https://docs.astral.sh/uv/getting-started/installation/) first (CI uses uv 0.13.5). Run backend checks from `backend` with `uv sync --locked --extra dev`, then `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy app`, and `uv run pytest`; run frontend checks from `frontend` with `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`. Stop local services with `docker compose down`; add `-v` only if you intentionally want to delete the local database volume.
+
+## License
+
+Released under the [MIT License](LICENSE).

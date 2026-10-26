@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,9 +8,10 @@ class Settings(BaseSettings):
     app_name: str = "Evidence-backed Knowledge Assistant API"
     app_env: str = "development"
     database_url: str = (
-        "postgresql+psycopg://knowledge_assistant:local_dev_only"
-        "@localhost:5432/knowledge_assistant"
+        "postgresql+psycopg://knowledge_assistant:local_dev_only@localhost:5432/knowledge_assistant"
     )
+    # Bounds each connection attempt so readiness fails fast instead of hanging.
+    database_connect_timeout_seconds: int = Field(default=3, ge=1)
     cors_origins: list[str] = ["http://localhost:5173"]
 
     model_config = SettingsConfigDict(
