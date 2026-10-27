@@ -2,12 +2,12 @@
 
 | Field | Value | Remarks |
 |---|---|---|
-| Last updated | 2026-10-26 | Update at the end of every work session |
-| Current stage | Phase 1 — repository and local foundation | Code, local checks, and GitHub Actions CI pass (V-21); the container stack has never been run (B-01) |
+| Last updated | 2026-10-27 | Update at the end of every work session |
+| Current stage | Phase 1 — repository and local foundation | Code, local checks, and CI pass. CI also builds and runs the container stack on GitHub's Linux runner (V-36, V-40), but the stack hasn't run on this machine yet (B-01) |
 | Source of truth | [Project specification](../../README.md) | This tracker records progress against the spec; it does not replace it |
-| GitHub repository | [tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) | Created 2026-10-26 (public). Phase 1 foundation pushed 2026-10-26 (commit `f5f4edc`, P1-29); CI passes (V-21). Personal notes stay local (D-21) |
+| GitHub repository | [tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) | Created 2026-10-26 (public; MIT license since 2026-10-27, D-23). Pushed: foundation `f5f4edc` (2026-10-26); hygiene `d9e50be` and the Compose fix `81262e8` (2026-10-27). CI passes (V-21, V-36, V-40). Personal notes stay local (D-21) |
 | AI/RAG features | None yet | By design: Phase 1 is foundation only |
-| Checks (2026-10-26) | 19 passed, 2 failed | Includes the first GitHub Actions run (V-21). Open failure: `ruff format --check` on one file (I-09). The registry URLs in `package-lock.json` (V-15) were fixed before the push (V-17). Details in [02-verification-log.md](02-verification-log.md) |
+| Checks (2026-10-27) | 36 passed, 5 failed | Every failure has been fixed: V-03 by V-23, V-15 by V-17, V-26 by V-27, V-31 by V-32, V-34 by V-35. CI checks (V-21, V-36, V-40) ran on GitHub's runner, not this machine. Details in [02-verification-log.md](02-verification-log.md) |
 | Measured metrics | None | Evaluation is Phase 5; never publish unmeasured numbers |
 | Cloud resources / paid APIs | None | The default path stays local and free |
 
@@ -28,47 +28,46 @@ Counts come from [01-task-tracker.md](01-task-tracker.md). They are unweighted t
 
 | Phase | Focus | Status | Tasks | ✅ | 🟡 | 🔄 | ⏳ | ⛔ | ⏸️ | Definition of done met? | Remarks |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| P0 | Confirm environment and decisions | 🔄 In progress | 7 | 1 | 0 | 0 | 6 | 0 | 0 | ❌ No | Tool versions checked; hardware check and corpus/auth/model decisions still open |
-| P1 | Repository and local foundation | 🔄 In progress | 29 | 16 | 4 | 0 | 6 | 3 | 0 | ❌ No | Code, local checks, and CI pass (V-21). "Clean checkout starts locally" not yet shown: the container stack has never run (B-01) |
+| P0 | Confirm environment and decisions | 🔄 In progress | 7 | 2 | 0 | 0 | 5 | 0 | 0 | ❌ No | Tool versions and hardware checked; corpus, auth, and model decisions still open (P0-03 – P0-07) |
+| P1 | Repository and local foundation | 🔄 In progress | 30 | 24 | 1 | 1 | 1 | 3 | 0 | ❌ No | Hygiene done (P1-24 – P1-27). CI builds and runs the stack (P1-30), but "a clean checkout starts locally" isn't shown on this machine yet (B-01) |
 | P2 | Workspace and document lifecycle | ⏳ Not started | 13 | 0 | 0 | 0 | 13 | 0 | 0 | ❌ No | Start after Phase 1 is done and the auth mode is decided (PD-01) |
 | P3 | Ingestion and semantic indexing | ⏳ Not started | 12 | 0 | 0 | 0 | 12 | 0 | 0 | ❌ No | Needs corpus, embedding model, and PDF library decisions |
 | P4 | Grounded question answering | ⏳ Not started | 10 | 0 | 0 | 0 | 10 | 0 | 0 | ❌ No | Needs the local LLM runtime decision (PD-05) |
 | P5 | Evaluation and hardening | ⏳ Not started | 8 | 0 | 0 | 0 | 8 | 0 | 0 | ❌ No | No evaluation results exist yet |
 | P6 | Portfolio polish and optional deployment | ⏳ Not started | 6 | 0 | 0 | 0 | 4 | 0 | 2 | ❌ No | Cloud deployment is optional and deferred |
 | DOC | Documentation and tracking | 🔄 In progress | 5 | 2 | 0 | 1 | 2 | 0 | 0 | — | Spec and tracker done; upkeep ongoing |
-| **Total** | | | **90** | **19** | **4** | **1** | **61** | **3** | **2** | | |
+| **Total** | | | **91** | **28** | **1** | **2** | **55** | **3** | **2** | | |
 
 ## Blockers
 
 | ID | Blocker | Blocks | How to unblock | Who | Status | Remarks |
 |---|---|---|---|---|---|---|
-| B-01 | No container runtime: Docker and Podman were not found | P1-18 – P1-20, P2-13, and all live-database work | Install Docker Desktop, Rancher Desktop, or Podman (PD-13), then run the README quickstart | Arvind | ⛔ Open | Check license terms and IT policy on a managed machine. Native PostgreSQL + pgvector is a harder fallback on Windows |
+| B-01 | No container runtime: Docker and Podman were not found | P1-18 – P1-20, P2-13, and all live-database work | Install Docker Desktop, Rancher Desktop, or Podman (PD-13), then run the README quickstart | Arvind | ⛔ Open | Check license terms and IT policy on a managed machine. Native PostgreSQL + pgvector is a harder fallback on Windows. Re-checked 2026-10-27: no Docker, Podman, nerdctl, or WSL distribution. Meanwhile CI runs the stack (V-36) |
 | B-02 | CI has never run on GitHub: this folder was not a git repository or connected to the repository | P1-23, P5-05 | Push (P1-29), then confirm the first CI run passes (P1-23) | Implementation session | ✅ Resolved 2026-10-26 | Pushed commit `f5f4edc`; the first CI run passed (V-21) |
 
 ## Pre-push checklist
 
-The GitHub repository is public, and anything pushed stays in git history. Run these checks before every push. Status below is for the first push on 2026-10-26.
+The GitHub repository is public, and anything pushed stays in git history. Run these checks before every push. Status below is for the latest pushes on 2026-10-27.
 
 | # | Check | Status | Related | Remarks |
 |---|---|---|---|---|
-| 1 | `frontend/package-lock.json` contains no internal registry URLs | ✅ Done | I-16, P1-28, V-17 | No `resolved` URLs; integrity hashes kept (D-19) |
+| 1 | `frontend/package-lock.json` contains no internal registry URLs | ✅ Done | I-16, P1-28, V-17, V-29 | No `resolved` URLs; integrity hashes kept (D-19). Still true after the lockfile was regenerated on 2026-10-27 (V-29) |
 | 2 | Decide whether to publish `04-skills-evidence.md` | ✅ Kept local | PD-12, D-21 | Git-ignored. To publish it, remove its line from `.gitignore` and commit it |
 | 3 | Choose the commit author email | ✅ No-reply address | PD-15, D-20 | Set for this repository only; the global git identity is unchanged |
-| 4 | Choose a license | ⏳ Open | PD-16 | Not blocking. Without one, others may view the code but have no right to reuse it |
-| 5 | Make sure the repository description matches what's built | ⏳ Open | — | Your text, left unchanged. It describes citations and abstention, which aren't built yet; consider marking them as planned |
-| 6 | Scan for secrets, internal hostnames, and personal data | ✅ Done | V-16, V-20, R-13 | Staged files scanned right before the first push; repeat before every push |
+| 4 | Choose a license | ✅ MIT | PD-16, D-23 | Chosen by Arvind on 2026-10-27 |
+| 5 | Make sure the repository description matches what's built | ✅ Done | D-25 | Updated 2026-10-27 with owner-approved text that marks the project as work in progress. Review it whenever a phase completes |
+| 6 | Scan for secrets, internal hostnames, and personal data | ✅ Done | V-16, V-20, V-37, V-39, V-41, R-13 | Staged files scanned before every push so far; repeat before every push |
 | 7 | `.env`, virtual environments, `node_modules`, and local data are git-ignored | ✅ Done | P1-11, V-20 | Confirmed with `git status` after `git init` |
 
 ## Next actions (in order)
 
 | # | Action | Task IDs | Who | Remarks |
 |---|---|---|---|---|
-| 1 | Install a permitted container runtime | PD-13, P1-17 | Arvind | Unblocks most remaining Phase 1 checks |
-| 2 | Run the quickstart and record the results in [02-verification-log.md](02-verification-log.md) | P1-18 – P1-21 | Arvind or implementation session | Move 🟡 items to ✅ only after a real run |
-| 3 | Choose a license and review the repository description | PD-16 | Arvind | Not blocking. The description presents citations and abstention as built; see pre-push checklist items 4 and 5 |
-| 4 | Phase 1 hygiene: formatting and CI format step, backend lock file, pip-audit, devDependencies, CI action versions | P1-24 – P1-27, I-17 | Implementation session | Small changes; re-run all checks afterwards |
-| 5 | Make the Phase 0 decisions and write down the configuration | P0-02 – P0-07 | Arvind | Needed before Phases 2–4 |
-| 6 | Start Phase 2 | P2-01 onward | Implementation session | Only after the Phase 1 definition of done is met |
+| 1 | Install a permitted container runtime | PD-13, P1-17 | Arvind | Unblocks the remaining Phase 1 checks on this machine. Re-checked 2026-10-27: none installed |
+| 2 | Run the quickstart on this machine and record the results in [02-verification-log.md](02-verification-log.md) | P1-16, P1-18 – P1-21 | Arvind or implementation session | CI already runs the same steps (V-36); this shows the stack also starts here. Move 🟡 items to ✅ only after a real run |
+| 3 | Make the Phase 0 decisions and write down the configuration | P0-03 – P0-07 (PD-01, PD-02, PD-03, PD-05) | Arvind | Needed before Phases 2–4. Hardware is checked (P0-02) |
+| 4 | Optional small fixes | I-08, I-20, I-21, DOC-03 (I-06) | Implementation session | Not blocking; push code changes through a branch so CI checks them first ([commands](05-project-reference.md#8-commands)) |
+| 5 | Start Phase 2 | P2-01 onward | Implementation session | Only after the Phase 1 definition of done is met and the auth mode is decided (PD-01) |
 
 ## Tracker files
 
@@ -114,3 +113,13 @@ The GitHub repository is public, and anything pushed stays in git history. Run t
 | 2026-10-26 | Initialized git in the project folder and scanned the staged files | ✅ | V-20. First push: P1-29 |
 | 2026-10-26 | Pushed the Phase 1 foundation to GitHub: commit `f5f4edc`, 43 files | ✅ | The first CI run passed (V-21); non-blocking annotations logged as I-17 |
 | 2026-10-26 | Updated the tracker after the push: tasks P1-15, P1-23, and P1-29; blocker B-02; issues I-02 and I-17; check V-21 | ✅ | Committed and pushed as a follow-up commit |
+| 2026-10-27 | Checked the hardware for sizing local models (P0-02) | ✅ | Generic summary in V-22; no model has been run or measured |
+| 2026-10-27 | Arvind chose: uv and pip-audit inside `backend\.venv` only, the MIT license, and a work-in-progress repository description | ✅ | D-22, D-23, D-25 |
+| 2026-10-27 | Phase 1 hygiene: formatting fix and CI format check, backend lock file `uv.lock`, dependency audit, and build tools moved to devDependencies | ✅ | P1-24 – P1-27. The audit found 8 known vulnerabilities, cleared by upgrades (I-22, D-27; V-26 → V-27) |
+| 2026-10-27 | Ran the API on the host for the first time; found and fixed a readiness hang when no database is reachable | ✅ | V-31 → V-32 (I-18, D-28) |
+| 2026-10-27 | Checked the landing page in a browser; fixed the focus outline contrast | ✅ | V-33 – V-35 (I-19). Two minor issues logged (I-20, I-21) |
+| 2026-10-27 | CI: v7 actions on `ubuntu-24.04`, backend installs with uv, and a new compose smoke job. Added `LICENSE` and updated the quickstart for uv | ✅ | D-24, D-26, P1-30 |
+| 2026-10-27 | Pushed branch `phase1-hygiene` (commit `d9e50be`) | ✅ | Scanned first (V-37); all 3 CI jobs passed (V-36) |
+| 2026-10-27 | Updated the repository description on GitHub | ✅ | Owner-approved text (D-25) |
+| 2026-10-27 | Compose now passes the database connect timeout to the backend (commit `81262e8`) | ✅ | I-23; V-38 – V-40 |
+| 2026-10-27 | Recorded this work in the tracker; `main` fast-forwarded to the branch commits and pushed with this update | ✅ | Staged files scanned first (V-41). The branch is deleted once `main` passes CI |

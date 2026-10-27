@@ -1,6 +1,6 @@
 # Project reference
 
-**Last updated:** 2026-10-26 · **Status legend:** see [README.md](README.md#status-legend)
+**Last updated:** 2026-10-27 · **Status legend:** see [README.md](README.md#status-legend)
 
 Reference data for the current code. Update it whenever files, dependencies, or configuration change.
 
@@ -8,29 +8,32 @@ Reference data for the current code. Update it whenever files, dependencies, or 
 
 | Path | Purpose | Status | Remarks |
 |---|---|---|---|
-| `README.md` | Project specification (source of truth) and Phase 1 quickstart | ✅ | — |
+| `README.md` | Project specification (source of truth) and Phase 1 quickstart | ✅ | Quickstart updated for uv and a License section added on 2026-10-27 |
+| `LICENSE` | MIT License | ✅ | D-23 |
 | `.env.example` | Template for local configuration | ✅ | Copy to `.env`; never commit `.env` |
 | `.gitignore` | Ignores secrets, virtual environments, caches, build output, local data | ✅ | Also keeps `docs/tracker/04-skills-evidence.md` local (D-21) |
-| `compose.yaml` | Local stack: `db`, `backend`, `frontend` | 🟡 | Never run (B-01) |
-| `.github/workflows/ci.yml` | CI for backend and frontend | ✅ | The first run on GitHub passed (V-21); action-version warnings (I-17) |
+| `compose.yaml` | Local stack: `db`, `backend`, `frontend` | ✅ | Built and run in CI (V-36, V-40); not yet run on this machine (B-01). Passes the connect timeout to the backend (I-23) |
+| `.github/workflows/ci.yml` | CI: `backend`, `frontend`, and `compose smoke` jobs | ✅ | v7 actions on `ubuntu-24.04` (D-24, D-26); runs pass (V-21, V-36, V-40) |
 | `docs/tracker/` | This tracker (6 files) | ✅ | `04-skills-evidence.md` is local only and not published (D-21) |
-| `backend/pyproject.toml` | Package metadata, pinned dependencies, Ruff/mypy/pytest configuration | ✅ | — |
-| `backend/Dockerfile`, `backend/.dockerignore` | Dev image (Python 3.12) | 🟡 | Never built |
+| `backend/pyproject.toml` | Package metadata, pinned direct dependencies, Ruff/mypy/pytest configuration | ✅ | Transitive versions are in `uv.lock` |
+| `backend/uv.lock` | Exact versions of every backend package, direct and transitive | ✅ | 46 packages (V-24). Regenerate with `uv lock`; never edit by hand (D-22) |
+| `backend/Dockerfile`, `backend/.dockerignore` | Dev image (Python 3.12; installs from `uv.lock` with uv 0.13.5) | ✅ | Built and run in CI (V-36); not yet built on this machine (B-01) |
 | `backend/alembic.ini` | Alembic configuration | ✅ | The URL is overridden in `env.py` |
 | `backend/alembic/env.py` | Migration runner; reads the database URL from app settings | ✅ | — |
 | `backend/alembic/script.py.mako` | Template for new migrations | ✅ | — |
-| `backend/alembic/versions/0001_enable_pgvector.py` | Enables the `vector` extension | ✅ Offline only | Live apply pending (P1-19) |
+| `backend/alembic/versions/0001_enable_pgvector.py` | Enables the `vector` extension | ✅ | Applied to a live database in CI (V-36); not yet on this machine (P1-19) |
 | `backend/app/main.py` | FastAPI app, CORS middleware, router registration | ✅ | — |
 | `backend/app/api/router.py` | Combines API routers | ✅ | — |
 | `backend/app/api/health.py` | `/health/live` and `/health/ready` | ✅ | — |
-| `backend/app/core/config.py` | Settings from environment variables and `.env` | ✅ | Formatting drift (I-09) |
-| `backend/app/core/database.py` | Cached SQLAlchemy engine; `SELECT 1` check | ✅ | — |
+| `backend/app/core/config.py` | Settings from environment variables and `.env` | ✅ | Includes the database connect timeout (D-28) |
+| `backend/app/core/database.py` | Cached SQLAlchemy engine with a bounded connect timeout; `SELECT 1` check | ✅ | D-28 |
 | `backend/app/db/base.py` | SQLAlchemy `DeclarativeBase` for future models | ✅ | No models yet |
 | `backend/app/__init__.py`, `backend/app/api/__init__.py`, `backend/app/core/__init__.py`, `backend/app/db/__init__.py` | Package markers | ✅ | — |
 | `backend/tests/test_health.py` | 3 health endpoint tests | ✅ | Database mocked |
-| `frontend/package.json`, `frontend/package-lock.json` | Pinned dependencies, scripts, lockfile | ✅ | I-10. The lockfile records no registry URLs (D-19) |
+| `backend/tests/test_database.py` | 2 tests: the engine passes the connect timeout to the driver; a timeout of 0 is rejected | ✅ | Driver mocked; D-28 |
+| `frontend/package.json`, `frontend/package-lock.json` | Pinned dependencies, scripts, lockfile | ✅ | Build tools are devDependencies since 2026-10-27 (P1-27). The lockfile records no registry URLs (D-19) |
 | `frontend/.npmrc` | Keeps registry URLs out of `package-lock.json` (`omit-lockfile-registry-resolved=true`) | ✅ | D-19; installs work from any npm registry |
-| `frontend/Dockerfile`, `frontend/.dockerignore` | Dev image (Node 22, Vite dev server) | 🟡 | Never built |
+| `frontend/Dockerfile`, `frontend/.dockerignore` | Dev image (Node 22, Vite dev server) | ✅ | Built and run in CI (V-36); not yet built on this machine (B-01) |
 | `frontend/index.html` | HTML entry point | ✅ | — |
 | `frontend/vite.config.ts` | Vite and Vitest (jsdom) configuration | ✅ | — |
 | `frontend/tsconfig.json` | Strict TypeScript configuration | ✅ | — |
@@ -38,36 +41,38 @@ Reference data for the current code. Update it whenever files, dependencies, or 
 | `frontend/src/main.tsx` | React entry point | ✅ | — |
 | `frontend/src/App.tsx` | Landing page and readiness indicator | ✅ | — |
 | `frontend/src/lib/api.ts` | Typed API client with runtime validation | ✅ | — |
-| `frontend/src/styles.css` | Styles (system fonts) | ✅ | — |
+| `frontend/src/styles.css` | Styles (system fonts) | ✅ | Focus outline `#315c48` meets the WCAG contrast minimum (I-19) |
 | `frontend/src/App.test.tsx` | Component test | ✅ | — |
 | `frontend/src/test/setup.ts` | Test setup (jest-dom matchers) | ✅ | — |
-| `backend/.venv/` | Local Python 3.14 virtual environment | Local only | Git-ignored; recreate at any time |
+| `backend/.venv/` | Local Python 3.14 virtual environment; also holds uv and pip-audit | Local only | Git-ignored; recreate with the first command in [section 8](#8-commands) |
 | `frontend/node_modules/` | Local npm packages | Local only | Git-ignored; recreate with `npm ci` |
 
 ## 2. Backend dependencies (`backend/pyproject.toml`)
 
 | Package | Version | Scope | Purpose | Remarks |
 |---|---|---|---|---|
-| fastapi | 0.115.12 | Runtime | Web framework | Deprecation warnings on Python 3.14 (I-04) |
+| fastapi | 0.162.0 | Runtime | Web framework | Upgraded from 0.115.12 on 2026-10-27 to clear known vulnerabilities in starlette (D-27); brings starlette 1.10.0 |
 | uvicorn[standard] | 0.34.2 | Runtime | ASGI server | Extras include watchfiles (used by `--reload`) |
 | pydantic-settings | 2.9.1 | Runtime | Typed settings from environment and `.env` | — |
 | sqlalchemy | 2.0.41 | Runtime | Database access and ORM | — |
 | alembic | 1.16.1 | Runtime | Migrations | — |
 | psycopg[binary] | 3.2.10 | Runtime | PostgreSQL driver | 3.2.9 had no Python 3.14 binary wheel |
 | pgvector | 0.4.1 | Runtime | pgvector types for SQLAlchemy | Not used yet; pulls in numpy |
-| httpx | 0.28.1 | Dev | Transport for the FastAPI test client | — |
-| pytest | 8.4.0 | Dev | Tests | — |
+| httpx2 | 2.16.0 | Dev | Transport for the FastAPI test client | Replaced httpx 0.28.1 on 2026-10-27; Starlette 1.x deprecates httpx for its test client (D-27) |
+| pytest | 9.1.1 | Dev | Tests | Upgraded from 8.4.0 on 2026-10-27 (D-27) |
 | mypy | 1.16.0 | Dev | Static type checking (strict) | — |
 | ruff | 0.11.13 | Dev | Linting and formatting | — |
 | setuptools | 80.9.0 | Build | Build backend | — |
+
+Transitive versions (for example starlette 1.10.0) are locked in `backend/uv.lock` (D-22). To change a version, edit `pyproject.toml` and update the lock file (section 8).
 
 ## 3. Frontend dependencies (`frontend/package.json`)
 
 | Package | Version | Scope | Purpose | Remarks |
 |---|---|---|---|---|
 | react, react-dom | 19.1.0 | dependencies | UI library | — |
-| vite | 6.4.5 | dependencies | Dev server and bundler | Should be a devDependency (I-10); upgraded from 6.3.5 |
-| @vitejs/plugin-react | 4.5.0 | dependencies | React support for Vite | Should be a devDependency (I-10) |
+| vite | 6.4.5 | devDependencies | Dev server and bundler | Moved from dependencies on 2026-10-27 (P1-27); upgraded from 6.3.5 |
+| @vitejs/plugin-react | 4.5.0 | devDependencies | React support for Vite | Moved from dependencies on 2026-10-27 (P1-27) |
 | typescript | 5.8.3 | devDependencies | Type checking | — |
 | eslint | 10.13.0 | devDependencies | Linting | Upgraded from 9.28.0 |
 | @eslint/js | 10.0.1 | devDependencies | Recommended ESLint rules | — |
@@ -87,7 +92,9 @@ Reference data for the current code. Update it whenever files, dependencies, or 
 | PostgreSQL with pgvector | `pgvector/pgvector:0.8.0-pg16` | Compose `db` service | PostgreSQL 16 with pgvector 0.8.0 |
 | Python | `python:3.12-slim` image; 3.12 in CI | Backend Dockerfile; CI backend job | — |
 | Node.js | `node:22-alpine` image; 22 in CI | Frontend Dockerfile; CI frontend job | — |
-| GitHub Actions | `actions/checkout@v4`, `actions/setup-python@v5`, `actions/setup-node@v4` | CI on `ubuntu-latest` | — |
+| GitHub Actions | `actions/checkout@v7`, `actions/setup-python@v7`, `actions/setup-node@v7` | CI on `ubuntu-24.04` | Upgraded from v4/v5 and pinned the runner image on 2026-10-27 (D-24) |
+| uv | 0.13.5 | CI backend job; backend Dockerfile; `backend\.venv` on this machine | D-22. Not installed globally |
+| pip-audit | 2.10.1 | `backend\.venv` on this machine | Not in CI yet (P5-05) |
 | Local Python | 3.14.0 | This machine | I-03 |
 | Local Node.js and npm | v24.18.1 and 11.16.0 | This machine | — |
 
@@ -102,6 +109,7 @@ Reference data for the current code. Update it whenever files, dependencies, or 
 | `API_PORT` | `8000` | Compose host port; frontend API URL | ✅ | — |
 | `WEB_PORT` | `5173` | Compose host port; CORS origin | ✅ | — |
 | `DATABASE_URL` | `postgresql+psycopg://knowledge_assistant:local_dev_only@localhost:5432/knowledge_assistant` | Backend on the host; Alembic | ✅ | Compose builds its own URL with host `db` |
+| `DATABASE_CONNECT_TIMEOUT_SECONDS` | `3` | Backend (host and Compose) | ✅ | Minimum 1; 0 is rejected because PostgreSQL would wait forever (D-28). Compose passes it to the container (I-23) |
 | `CORS_ORIGINS` | `["http://localhost:5173"]` | Backend | ✅ | JSON list |
 | `APP_ENV` | `development` | Backend | ✅ | No effect yet (I-13) |
 | `VITE_API_BASE_URL` | `http://localhost:8000` | Frontend | ❌ | Set by Compose (I-08) |
@@ -119,7 +127,7 @@ Reference data for the current code. Update it whenever files, dependencies, or 
 | Method | Path | Phase | Status | Remarks |
 |---|---|---|---|---|
 | GET | `/health/live` | P1 | ✅ Implemented | Returns `{"status":"ok"}` |
-| GET | `/health/ready` | P1 | ✅ Implemented | 200 `{"status":"ok","database":"ok"}` or 503 `{"status":"unavailable","database":"unavailable"}` |
+| GET | `/health/ready` | P1 | ✅ Implemented | 200 `{"status":"ok","database":"ok"}` or 503 `{"status":"unavailable","database":"unavailable"}`. Without a reachable database, 503 arrives in about 6–7 s on this machine (V-32, D-28) |
 | GET | `/docs`, `/openapi.json` | P1 | ✅ FastAPI default | Not separately tested; consider disabling outside development |
 | POST | `/api/v1/workspaces` | P2 | ⏳ Planned | Create a workspace |
 | GET | `/api/v1/workspaces` | P2 | ⏳ Planned | List accessible workspaces |
@@ -137,29 +145,48 @@ Backend commands call the venv interpreter directly, so the venv doesn't need to
 
 | Purpose | Command | Run from | Status | Remarks |
 |---|---|---|---|---|
-| Create the venv and install | `python -m venv .venv`, then `.\.venv\Scripts\python.exe -m pip install -e ".[dev]"` | `backend` | ✅ Used | — |
+| Create the venv and install | `python -m venv .venv`, then `.\.venv\Scripts\python.exe -m pip install uv==0.13.5 pip-audit==2.10.1`, then `.\.venv\Scripts\uv.exe sync --locked --extra dev --inexact` | `backend` | ✅ Used 2026-10-27 | Installs uv and pip-audit in the venv only (D-22). Keep `--inexact`: uv and pip-audit aren't in the lock file, so a plain `uv sync` would remove them |
 | Backend lint | `.\.venv\Scripts\python.exe -m ruff check .` | `backend` | ✅ Passing | — |
-| Backend format check | `.\.venv\Scripts\python.exe -m ruff format --check .` | `backend` | ❌ 1 file | Fix with `ruff format .` (P1-26) |
+| Backend format check | `.\.venv\Scripts\python.exe -m ruff format --check .` | `backend` | ✅ Passing | Fix with `ruff format .`. In CI since 2026-10-27 (P1-26) |
 | Backend type check | `.\.venv\Scripts\python.exe -m mypy app` | `backend` | ✅ Passing | — |
-| Backend tests | `.\.venv\Scripts\python.exe -m pytest` | `backend` | ✅ Passing | — |
+| Backend tests | `.\.venv\Scripts\python.exe -m pytest` | `backend` | ✅ Passing | Add `-W error` to fail on warnings (V-28) |
+| Update the backend lock file | `.\.venv\Scripts\uv.exe lock` after editing `pyproject.toml`; `.\.venv\Scripts\uv.exe lock --upgrade-package <name>` to upgrade one package; `.\.venv\Scripts\uv.exe lock --check` to confirm the lock is current | `backend` | ✅ Used 2026-10-27 | Commit `uv.lock` together with `pyproject.toml`; CI fails when they don't match (`uv sync --locked`) |
+| Audit backend dependencies | See the commands below this table | `backend` | ✅ Used 2026-10-27 | No known vulnerabilities on 2026-10-27 (V-27); CI audits are P5-05 |
 | Preview migration SQL | `.\.venv\Scripts\python.exe -m alembic upgrade head --sql` | `backend` | ✅ Works | Offline; no database needed |
-| Run the API on the host | `.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload` | `backend` | ⏳ Not run | NV-07 |
+| Run the API on the host | `.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload` | `backend` | ✅ Used 2026-10-27 | Run without `--reload` and without a database: `/health/live` 200, `/health/ready` 503 (V-31, V-32) |
 | Frontend install | `npm ci` | `frontend` | ✅ Used | — |
 | Frontend checks | `npm run lint`, `npm run typecheck`, `npm test`, `npm run build` | `frontend` | ✅ Passing | — |
-| Frontend dev server | `npm run dev` | `frontend` | ⏳ Not run | `http://localhost:5173` |
-| Start the stack | `Copy-Item .env.example .env`, then `docker compose up --build -d` | Project root | ⛔ Blocked | B-01 |
-| Apply migrations | `docker compose run --rm backend alembic upgrade head` | Project root | ⛔ Blocked | B-01 |
+| Audit frontend dependencies | `npm audit`, then `npm audit --omit=dev` | `frontend` | ✅ Used 2026-10-27 | 0 vulnerabilities in both (V-29) |
+| Frontend dev server | `npm run dev` | `frontend` | ✅ Used 2026-10-27 | `http://localhost:5173` (V-33) |
+| Start the stack | `Copy-Item .env.example .env`, then `docker compose up --build -d` | Project root | ⛔ Blocked | B-01. CI runs the same steps (V-36) |
+| Apply migrations | `docker compose run --rm backend alembic upgrade head` | Project root | ⛔ Blocked | B-01. CI runs the same command (V-36) |
 | Stop the stack | `docker compose down` | Project root | ⛔ Blocked | Add `-v` only to delete the local database volume |
 | First push | `git init -b main`, `git add .`, review `git status`, `git commit`, `git remote add origin https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant.git`, `git push -u origin main` | Project root | ✅ Done 2026-10-26 | Commit `f5f4edc` (D-18, P1-29). Commits use the no-reply address set for this repository only (D-20) |
 | Push later changes | `git status`, `git add <files>`, `git commit -m "<message>"`, `git push` | Project root | ✅ Used 2026-10-26 | Run the [pre-push checklist](README.md#pre-push-checklist) before every push; CI runs on every push |
+| Push code changes through a branch | `git switch -c <branch>`, commit, and `git push -u origin <branch>`; wait for CI to pass; then `git switch main`, `git merge --ff-only <branch>`, and `git push`; finally `git push origin --delete <branch>` and `git branch -d <branch>` | Project root | ✅ Used 2026-10-27 | CI checks code changes before they reach `main` (V-36, V-40). Run the pre-push checklist before each push |
+
+**Audit backend dependencies** (from `backend`). pip-audit checks the exact versions exported from `uv.lock` without installing anything:
+
+```powershell
+$req = Join-Path $env:TEMP "eka-requirements.txt"
+.\.venv\Scripts\uv.exe export --frozen --extra dev --no-emit-project --no-hashes --format requirements-txt |
+  Where-Object { $_ -match '^[A-Za-z0-9]' } |
+  ForEach-Object { ($_ -split ';')[0].Trim() } |
+  Sort-Object -Unique |
+  Set-Content $req
+.\.venv\Scripts\pip-audit.exe -r $req --no-deps --disable-pip --progress-spinner off
+Remove-Item $req
+```
+
+Exit code 0 with "No known vulnerabilities found" means the check passed. The warnings about hash checking are expected with `--no-deps`. The result is only valid for the day you run it.
 
 ## 9. Repository
 
 | Item | Value | Status | Remarks |
 |---|---|---|---|
 | URL | [github.com/tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) | ✅ Created | Public (D-16) |
-| Contents | Specification, Phase 1 foundation, and tracker | ✅ Pushed 2026-10-26 | First commit `f5f4edc` (D-18, P1-29). `04-skills-evidence.md` is not published (D-21) |
+| Contents | Specification, Phase 1 foundation and hygiene, and tracker | ✅ Pushed | First commit `f5f4edc` (2026-10-26; D-18, P1-29). Hygiene `d9e50be` and the Compose fix `81262e8` (2026-10-27). `04-skills-evidence.md` is not published (D-21) |
 | Default branch | `main` | ✅ | Matches `git init -b main` above |
-| GitHub Actions | Enabled; all actions allowed | ✅ | CI runs on every push and pull request; the first run passed (V-21) |
-| License | None | ⏳ Open | PD-16 |
-| Description | Set on GitHub; describes citations and abstention in the present tense | ⏳ Review | Your text, left unchanged. Those features aren't built yet (Phase 4); consider rewording it, for example as "in progress" (pre-push checklist item 5) |
+| GitHub Actions | Enabled; all actions allowed | ✅ | 3 jobs on every push and pull request; runs pass (V-21, V-36, V-40) |
+| License | MIT | ✅ Added 2026-10-27 | `LICENSE` (D-23) |
+| Description | Marks the project as work in progress and lists only what is built | ✅ Updated 2026-10-27 | Text approved by the owner (D-25). Update it as phases complete ([pre-push checklist](README.md#pre-push-checklist) item 5) |
