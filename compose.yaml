@@ -28,6 +28,7 @@ services:
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-knowledge_assistant}:${POSTGRES_PASSWORD:-local_dev_only}@db:5432/${POSTGRES_DB:-knowledge_assistant}
       CORS_ORIGINS: '["http://localhost:${WEB_PORT:-5173}"]'
+      DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-3}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
