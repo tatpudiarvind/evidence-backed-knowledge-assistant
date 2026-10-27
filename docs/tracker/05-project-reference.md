@@ -95,8 +95,9 @@ Transitive versions (for example starlette 1.10.0) are locked in `backend/uv.loc
 | GitHub Actions | `actions/checkout@v7`, `actions/setup-python@v7`, `actions/setup-node@v7` | CI on `ubuntu-24.04` | Upgraded from v4/v5 and pinned the runner image on 2026-10-27 (D-24) |
 | uv | 0.13.5 | CI backend job; backend Dockerfile; `backend\.venv` on this machine | D-22. Not installed globally |
 | pip-audit | 2.10.1 | `backend\.venv` on this machine | Not in CI yet (P5-05) |
-| Local Python | 3.14.0 | This machine | I-03 |
-| Local Node.js and npm | v24.18.1 and 11.16.0 | This machine | — |
+| Local Python | 3.14.0 (default); 3.12.15 under `D:\DevTools\python` | This machine | `backend\.venv` uses 3.14 (D-22). The 3.12 environment is `D:\DevTools\venvs\eka-backend-py312`, used by the backend checks on 3.12 (D-30, V-50) |
+| Local Node.js and npm | v24.18.1 and 11.16.0 (default); 22.23.4 and 10.9.9 under `D:\DevTools\node` | This machine | Node 22 isn't on PATH; the helper scripts in `D:\DevTools` put it first for their own process only (D-30, V-51) |
+| Local PostgreSQL with pgvector | PostgreSQL 16.15 with pgvector 0.8.0, under `D:\DevTools` | This machine only, while no container runtime is available (B-01) | D-29. Installed and checked in V-43 – V-47. Not part of the repository |
 
 ## 5. Environment variables
 
@@ -121,13 +122,14 @@ Transitive versions (for example starlette 1.10.0) are locked in `backend/uv.loc
 | `db` | `pgvector/pgvector:0.8.0-pg16` | `${POSTGRES_PORT:-5432}` | 5432 | `pg_isready` every 5 s, up to 10 retries | Data in volume `postgres_data`; never expose publicly |
 | `backend` | `backend/Dockerfile` | `${API_PORT:-8000}` | 8000 | None in Compose; use `/health/ready` | Starts after `db` is healthy; `uvicorn --reload`; bind-mounts `app/`, `alembic/`, `alembic.ini` |
 | `frontend` | `frontend/Dockerfile` | `${WEB_PORT:-5173}` | 5173 | None | Vite dev server; `node_modules` in volume `frontend_node_modules` |
+| Native PostgreSQL (this machine only) | `D:\DevTools\postgresql\16` with pgvector 0.8.0 (D-29) | 5432 | — (not a container) | `D:\DevTools\pg-status.cmd` (runs `pg_isready`) | Listens on localhost only; data in `D:\DevTools\pgdata\knowledge-assistant-pg16`. Uses the same host port as `db`, so run only one of them (R-14) |
 
 ## 7. API endpoints
 
 | Method | Path | Phase | Status | Remarks |
 |---|---|---|---|---|
 | GET | `/health/live` | P1 | ✅ Implemented | Returns `{"status":"ok"}` |
-| GET | `/health/ready` | P1 | ✅ Implemented | 200 `{"status":"ok","database":"ok"}` or 503 `{"status":"unavailable","database":"unavailable"}`. Without a reachable database, 503 arrives in about 6–7 s on this machine (V-32, D-28) |
+| GET | `/health/ready` | P1 | ✅ Implemented | 200 `{"status":"ok","database":"ok"}` or 503 `{"status":"unavailable","database":"unavailable"}`. Without a reachable database, 503 arrives in about 6–7 s on this machine (V-32, D-28), or about 3 s when `DATABASE_URL` uses `127.0.0.1` instead of `localhost` (I-25, V-48) |
 | GET | `/docs`, `/openapi.json` | P1 | ✅ FastAPI default | Not separately tested; consider disabling outside development |
 | POST | `/api/v1/workspaces` | P2 | ⏳ Planned | Create a workspace |
 | GET | `/api/v1/workspaces` | P2 | ⏳ Planned | List accessible workspaces |
@@ -157,8 +159,14 @@ Backend commands call the venv interpreter directly, so the venv doesn't need to
 | Frontend install | `npm ci` | `frontend` | ✅ Used | — |
 | Frontend checks | `npm run lint`, `npm run typecheck`, `npm test`, `npm run build` | `frontend` | ✅ Passing | — |
 | Audit frontend dependencies | `npm audit`, then `npm audit --omit=dev` | `frontend` | ✅ Used 2026-10-27 | 0 vulnerabilities in both (V-29) |
-| Frontend dev server | `npm run dev` | `frontend` | ✅ Used 2026-10-27 | `http://localhost:5173` (V-33) |
-| Start the stack | `Copy-Item .env.example .env`, then `docker compose up --build -d` | Project root | ⛔ Blocked | B-01. CI runs the same steps (V-36) |
+| Frontend dev server | `npm run dev` | `frontend` | ✅ Used 2026-10-27 | `http://localhost:5173` (V-33). Also listens on the local network (I-24) |
+| Start, check, or stop native PostgreSQL | `D:\DevTools\pg-start.cmd`, `D:\DevTools\pg-status.cmd`, `D:\DevTools\pg-stop.cmd` | Any folder | ✅ Used 2026-10-27 | This machine only (D-29). Start returns once the server accepts connections and keeps it running in a hidden window; status exits 0 when it accepts connections and 2 when it doesn't respond (V-52) |
+| Open psql on native PostgreSQL | `D:\DevTools\pg-psql.cmd`; extra arguments go to psql, for example `D:\DevTools\pg-psql.cmd -c "\dx"` | Any folder | ✅ Used 2026-10-27 | Connects to the `knowledge_assistant` database as `knowledge_assistant` (V-52) |
+| Shell with Node.js 22 and the PostgreSQL tools | `D:\DevTools\dev-shell.cmd` | Any folder | ✅ Used 2026-10-27 | Opens PowerShell with both first on PATH, for that window only (V-52) |
+| Apply migrations to native PostgreSQL | `.\.venv\Scripts\python.exe -m alembic upgrade head` | `backend` | ✅ Used 2026-10-27 | The default `DATABASE_URL` matches the native cluster, so no `.env` is needed (V-46). Then run the API on the host as above; readiness returns 200 (V-48) |
+| Backend checks on Python 3.12 | `D:\DevTools\backend-checks-py312.cmd` | Any folder | ✅ Used 2026-10-27 | Syncs `D:\DevTools\venvs\eka-backend-py312` from `uv.lock`, then runs Ruff, the format check, mypy, and pytest; `backend\.venv` isn't changed (V-50, V-52). Optional argument: another backend folder |
+| Frontend checks on Node.js 22 | `D:\DevTools\frontend-checks-node22.cmd` | Any folder | ✅ Used 2026-10-27 | Runs lint, typecheck, tests, and build with the existing `node_modules` (V-51, V-52); run `npm ci` from `dev-shell.cmd` first if `package-lock.json` changed. Optional argument: another frontend folder |
+| Start the stack | `Copy-Item .env.example .env`, then `docker compose up --build -d` | Project root | ⛔ Blocked | B-01. CI runs the same steps (V-36). Stop native PostgreSQL first, because both use port 5432 (R-14) |
 | Apply migrations | `docker compose run --rm backend alembic upgrade head` | Project root | ⛔ Blocked | B-01. CI runs the same command (V-36) |
 | Stop the stack | `docker compose down` | Project root | ⛔ Blocked | Add `-v` only to delete the local database volume |
 | First push | `git init -b main`, `git add .`, review `git status`, `git commit`, `git remote add origin https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant.git`, `git push -u origin main` | Project root | ✅ Done 2026-10-26 | Commit `f5f4edc` (D-18, P1-29). Commits use the no-reply address set for this repository only (D-20) |
@@ -185,7 +193,7 @@ Exit code 0 with "No known vulnerabilities found" means the check passed. The wa
 | Item | Value | Status | Remarks |
 |---|---|---|---|
 | URL | [github.com/tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) | ✅ Created | Public (D-16) |
-| Contents | Specification, Phase 1 foundation and hygiene, and tracker | ✅ Pushed | First commit `f5f4edc` (2026-10-26; D-18, P1-29). Hygiene `d9e50be` and the Compose fix `81262e8` (2026-10-27). `04-skills-evidence.md` is not published (D-21) |
+| Contents | Specification, Phase 1 foundation and hygiene, and tracker | ✅ Pushed | First commit `f5f4edc` (2026-10-26; D-18, P1-29). Hygiene `d9e50be` and the Compose fix `81262e8` (2026-10-27). `04-skills-evidence.md` is not published (D-21). Nothing from `D:\DevTools` is in the repository (D-29) |
 | Default branch | `main` | ✅ | Matches `git init -b main` above |
 | GitHub Actions | Enabled; all actions allowed | ✅ | 3 jobs on every push and pull request; runs pass (V-21, V-36, V-40) |
 | License | MIT | ✅ Added 2026-10-27 | `LICENSE` (D-23) |

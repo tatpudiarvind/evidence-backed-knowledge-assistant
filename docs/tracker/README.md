@@ -3,11 +3,11 @@
 | Field | Value | Remarks |
 |---|---|---|
 | Last updated | 2026-10-27 | Update at the end of every work session |
-| Current stage | Phase 1 — repository and local foundation | Code, local checks, and CI pass. CI also builds and runs the container stack on GitHub's Linux runner (V-36, V-40), but the stack hasn't run on this machine yet (B-01) |
+| Current stage | Phase 1 — repository and local foundation | Code, local checks, and CI pass. CI also builds and runs the container stack on GitHub's Linux runner (V-36, V-40), but the stack hasn't run on this machine yet (B-01). Meanwhile the app runs here against a native PostgreSQL with pgvector (D-29; V-46, V-48, V-49) |
 | Source of truth | [Project specification](../../README.md) | This tracker records progress against the spec; it does not replace it |
-| GitHub repository | [tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) | Created 2026-10-26 (public; MIT license since 2026-10-27, D-23). Pushed: foundation `f5f4edc` (2026-10-26); hygiene `d9e50be` and the Compose fix `81262e8` (2026-10-27). CI passes (V-21, V-36, V-40). Personal notes stay local (D-21) |
+| GitHub repository | [tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) | Created 2026-10-26 (public; MIT license since 2026-10-27, D-23). Pushed: foundation `f5f4edc` (2026-10-26); hygiene `d9e50be` and the Compose fix `81262e8` (2026-10-27). CI passes (V-21, V-36, V-40, V-53). Personal notes stay local (D-21) |
 | AI/RAG features | None yet | By design: Phase 1 is foundation only |
-| Checks (2026-10-27) | 36 passed, 5 failed | Every failure has been fixed: V-03 by V-23, V-15 by V-17, V-26 by V-27, V-31 by V-32, V-34 by V-35. CI checks (V-21, V-36, V-40) ran on GitHub's runner, not this machine. Details in [02-verification-log.md](02-verification-log.md) |
+| Checks (2026-10-27) | 49 passed, 5 failed | Every failure has been fixed: V-03 by V-23, V-15 by V-17, V-26 by V-27, V-31 by V-32, V-34 by V-35. CI checks (V-21, V-36, V-40, V-53) ran on GitHub's runner, not this machine. V-42 – V-52 cover the tools installed under `D:\DevTools`. Details in [02-verification-log.md](02-verification-log.md) |
 | Measured metrics | None | Evaluation is Phase 5; never publish unmeasured numbers |
 | Cloud resources / paid APIs | None | The default path stays local and free |
 
@@ -29,20 +29,20 @@ Counts come from [01-task-tracker.md](01-task-tracker.md). They are unweighted t
 | Phase | Focus | Status | Tasks | ✅ | 🟡 | 🔄 | ⏳ | ⛔ | ⏸️ | Definition of done met? | Remarks |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | P0 | Confirm environment and decisions | 🔄 In progress | 7 | 2 | 0 | 0 | 5 | 0 | 0 | ❌ No | Tool versions and hardware checked; corpus, auth, and model decisions still open (P0-03 – P0-07) |
-| P1 | Repository and local foundation | 🔄 In progress | 30 | 24 | 1 | 1 | 1 | 3 | 0 | ❌ No | Hygiene done (P1-24 – P1-27). CI builds and runs the stack (P1-30), but "a clean checkout starts locally" isn't shown on this machine yet (B-01) |
+| P1 | Repository and local foundation | 🔄 In progress | 32 | 27 | 1 | 0 | 1 | 3 | 0 | ❌ No | Hygiene done (P1-24 – P1-27). CI builds and runs the stack (P1-30), but "a clean checkout starts locally" isn't shown on this machine yet (B-01). Native PostgreSQL, Python 3.12, and Node 22 added on this machine (P1-31, P1-32) |
 | P2 | Workspace and document lifecycle | ⏳ Not started | 13 | 0 | 0 | 0 | 13 | 0 | 0 | ❌ No | Start after Phase 1 is done and the auth mode is decided (PD-01) |
 | P3 | Ingestion and semantic indexing | ⏳ Not started | 12 | 0 | 0 | 0 | 12 | 0 | 0 | ❌ No | Needs corpus, embedding model, and PDF library decisions |
 | P4 | Grounded question answering | ⏳ Not started | 10 | 0 | 0 | 0 | 10 | 0 | 0 | ❌ No | Needs the local LLM runtime decision (PD-05) |
 | P5 | Evaluation and hardening | ⏳ Not started | 8 | 0 | 0 | 0 | 8 | 0 | 0 | ❌ No | No evaluation results exist yet |
 | P6 | Portfolio polish and optional deployment | ⏳ Not started | 6 | 0 | 0 | 0 | 4 | 0 | 2 | ❌ No | Cloud deployment is optional and deferred |
 | DOC | Documentation and tracking | 🔄 In progress | 5 | 2 | 0 | 1 | 2 | 0 | 0 | — | Spec and tracker done; upkeep ongoing |
-| **Total** | | | **91** | **28** | **1** | **2** | **55** | **3** | **2** | | |
+| **Total** | | | **93** | **31** | **1** | **1** | **55** | **3** | **2** | | |
 
 ## Blockers
 
 | ID | Blocker | Blocks | How to unblock | Who | Status | Remarks |
 |---|---|---|---|---|---|---|
-| B-01 | No container runtime: Docker and Podman were not found | P1-18 – P1-20, P2-13, and all live-database work | Install Docker Desktop, Rancher Desktop, or Podman (PD-13), then run the README quickstart | Arvind | ⛔ Open | Check license terms and IT policy on a managed machine. Native PostgreSQL + pgvector is a harder fallback on Windows. Re-checked 2026-10-27: no Docker, Podman, nerdctl, or WSL distribution. Meanwhile CI runs the stack (V-36) |
+| B-01 | No container runtime: Docker and Podman were not found | P1-18 – P1-20 (the Compose stack on this machine) | Ask IT to enable WSL 2 or Hyper-V, or to install a permitted runtime (Docker Desktop, Rancher Desktop, or Podman; PD-13), then run the README quickstart | Arvind | ⛔ Open | This account has no administrator rights, and WSL and Hyper-V are off (V-42). Check license terms and IT policy. Meanwhile CI runs the stack (V-36), and native PostgreSQL + pgvector covers database work on this machine (D-29) |
 | B-02 | CI has never run on GitHub: this folder was not a git repository or connected to the repository | P1-23, P5-05 | Push (P1-29), then confirm the first CI run passes (P1-23) | Implementation session | ✅ Resolved 2026-10-26 | Pushed commit `f5f4edc`; the first CI run passed (V-21) |
 
 ## Pre-push checklist
@@ -56,18 +56,18 @@ The GitHub repository is public, and anything pushed stays in git history. Run t
 | 3 | Choose the commit author email | ✅ No-reply address | PD-15, D-20 | Set for this repository only; the global git identity is unchanged |
 | 4 | Choose a license | ✅ MIT | PD-16, D-23 | Chosen by Arvind on 2026-10-27 |
 | 5 | Make sure the repository description matches what's built | ✅ Done | D-25 | Updated 2026-10-27 with owner-approved text that marks the project as work in progress. Review it whenever a phase completes |
-| 6 | Scan for secrets, internal hostnames, and personal data | ✅ Done | V-16, V-20, V-37, V-39, V-41, R-13 | Staged files scanned before every push so far; repeat before every push |
+| 6 | Scan for secrets, internal hostnames, and personal data | ✅ Done | V-16, V-20, V-37, V-39, V-41, V-54, R-13 | Staged files scanned before every push so far; repeat before every push |
 | 7 | `.env`, virtual environments, `node_modules`, and local data are git-ignored | ✅ Done | P1-11, V-20 | Confirmed with `git status` after `git init` |
 
 ## Next actions (in order)
 
 | # | Action | Task IDs | Who | Remarks |
 |---|---|---|---|---|
-| 1 | Install a permitted container runtime | PD-13, P1-17 | Arvind | Unblocks the remaining Phase 1 checks on this machine. Re-checked 2026-10-27: none installed |
-| 2 | Run the quickstart on this machine and record the results in [02-verification-log.md](02-verification-log.md) | P1-16, P1-18 – P1-21 | Arvind or implementation session | CI already runs the same steps (V-36); this shows the stack also starts here. Move 🟡 items to ✅ only after a real run |
+| 1 | Ask IT for a permitted container runtime | PD-13, P1-17 | Arvind | This account can't enable WSL 2 or Hyper-V, which every option needs (V-42). Unblocks the remaining Phase 1 checks on this machine |
+| 2 | Run the quickstart on this machine and record the results in [02-verification-log.md](02-verification-log.md) | P1-16, P1-18 – P1-20 | Arvind or implementation session | CI already runs the same steps (V-36); this shows the stack also starts here. Stop native PostgreSQL first, because both use port 5432 (R-14). Move 🟡 items to ✅ only after a real run |
 | 3 | Make the Phase 0 decisions and write down the configuration | P0-03 – P0-07 (PD-01, PD-02, PD-03, PD-05) | Arvind | Needed before Phases 2–4. Hardware is checked (P0-02) |
-| 4 | Optional small fixes | I-08, I-20, I-21, DOC-03 (I-06) | Implementation session | Not blocking; push code changes through a branch so CI checks them first ([commands](05-project-reference.md#8-commands)) |
-| 5 | Start Phase 2 | P2-01 onward | Implementation session | Only after the Phase 1 definition of done is met and the auth mode is decided (PD-01) |
+| 4 | Optional small fixes | I-08, I-20, I-21, I-24, I-25, DOC-03 (I-06) | Implementation session | Not blocking; push code changes through a branch so CI checks them first ([commands](05-project-reference.md#8-commands)) |
+| 5 | Start Phase 2 | P2-01 onward | Implementation session | Only after the Phase 1 definition of done is met and the auth mode is decided (PD-01). Native PostgreSQL lets the first tables and integration tests run on this machine (P2-02, P2-13) |
 
 ## Tracker files
 
@@ -123,3 +123,8 @@ The GitHub repository is public, and anything pushed stays in git history. Run t
 | 2026-10-27 | Updated the repository description on GitHub | ✅ | Owner-approved text (D-25) |
 | 2026-10-27 | Compose now passes the database connect timeout to the backend (commit `81262e8`) | ✅ | I-23; V-38 – V-40 |
 | 2026-10-27 | Recorded this work in the tracker; `main` fast-forwarded to the branch commits and pushed with this update | ✅ | Staged files scanned first (V-41). The branch is deleted once `main` passes CI |
+| 2026-10-27 | Arvind asked to download and install on D: whatever is possible; checked what this account can install | ✅ | No administrator rights, and WSL and Hyper-V are off, so a container runtime needs IT (V-42). conda-forge is blocked by this machine's network policy |
+| 2026-10-27 | Installed under `D:\DevTools`, outside the repository: PostgreSQL 16.15 with pgvector 0.8.0 (built from source), Python 3.12.15, and Node.js 22.23.4 | ✅ | P1-31, P1-32; D-29, D-30. No administrator rights used; no PATH, registry, or Windows service changes (V-43 – V-45, V-50, V-51) |
+| 2026-10-27 | Ran the app against the native database: migrations, pgvector's own tests, readiness, and the landing page's ready state | ✅ | V-46 – V-49. P1-21 done; I-03 resolved; new minor issues I-24 and I-25 |
+| 2026-10-27 | Added helper scripts and a `README.txt` in `D:\DevTools` to start and stop the database and to run the checks on Python 3.12 and Node 22 | ✅ | V-52. Not part of the repository |
+| 2026-10-27 | Recorded this work in the tracker and pushed it to `main` | ✅ | Staged files scanned first (V-54). CI for the previous push passed (V-53) |
