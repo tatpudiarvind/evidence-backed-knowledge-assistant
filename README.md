@@ -35,7 +35,7 @@ The portfolio goal is to turn the existing enterprise knowledge-assistant experi
 
 ## 3. User stories and acceptance criteria
 
-1. **Upload a document:** A user uploads an allowed file. The API validates file type and size, creates a document record, and returns its ID and ingestion state. A rejected file produces a clear 4xx response and is not indexed.
+1. **Upload documents:** A user uploads one or more allowed files; each file is uploaded and processed separately. The API validates file type and size, creates a document record, and returns its ID and ingestion state. A rejected file produces a clear 4xx response and is not indexed, without affecting the other files.
 2. **Ingest a document:** The system extracts text, creates chunks and embeddings, and marks the document `ready`. A parser or provider failure marks it `failed` with a safe, user-visible explanation; internal logs retain diagnostic details without secrets or document text by default.
 3. **Ask a question:** A user asks a question in their workspace. The service retrieves only chunks belonging to documents they can access, generates a grounded response, and returns citations linked to the correct document and page/section.
 4. **Handle unsupported questions:** If retrieval finds insufficient evidence, the API returns an abstention response and no fabricated citations.
@@ -50,11 +50,12 @@ The portfolio goal is to turn the existing enterprise knowledge-assistant experi
 | Frontend | React + TypeScript + Vite | Demonstrates React while keeping a small, typed client. |
 | API | Python 3.12+ / FastAPI | Typed REST API, OpenAPI docs, suitable for learning modern Python backend practices. |
 | Validation | Pydantic | Validate request/response contracts at API boundaries. |
+| Authentication | Local email/password accounts: Argon2id password hashes (argon2-cffi) and server-side sessions in an HttpOnly cookie | Simple and free, and supports several users so workspace isolation can be tested. No custom cryptography; a full auth provider is deferred (§15). |
 | Persistence | PostgreSQL + pgvector | One database for users, workspaces, documents, chunks, and vector search. |
 | ORM/migrations | SQLAlchemy 2 + Alembic | Explicit schema models and repeatable migrations. |
-| Document parsing | PyMuPDF for PDF, python-docx for DOCX, standard text decoding for TXT | Keep parsing isolated behind an interface; preserve page/section metadata where possible. |
-| Embeddings | Sentence Transformers local model initially | Local, repeatable, no per-call API bill; model and vector dimensions are configuration, not hard-coded assumptions. |
-| LLM | Provider interface; local Ollama adapter first, optional hosted adapter later | Local development avoids mandatory paid API; hosted provider is opt-in and clearly disclosed. |
+| Document parsing | pypdf for PDF (pypdfium2 as fallback), python-docx for DOCX, UTF-8 decoding for TXT | Permissive licenses (BSD-3-Clause, MIT) that suit the MIT-licensed repository; PyMuPDF is AGPL-3.0 or commercial. Keep parsing isolated behind an interface; preserve page/section metadata where possible. No OCR in the MVP: a scanned PDF without a text layer fails with a clear message. |
+| Embeddings | Sentence Transformers with `BAAI/bge-small-en-v1.5` (384 dimensions, MIT) on CPU; `all-MiniLM-L6-v2` (384 dimensions, Apache-2.0) as fallback | Local, repeatable, no per-call API bill; model and vector dimensions are configuration, not hard-coded assumptions. Tests use a deterministic fake embedder. |
+| LLM | Provider interface; local Ollama adapter first (default model Qwen3-4B-Instruct-2507, Apache-2.0; exact tag pinned at first download); search-only mode (cited passages, no generated text) when no model is available; optional hosted adapter later | Local development avoids mandatory paid API; hosted provider is opt-in and clearly disclosed. |
 | Retrieval | pgvector cosine similarity; add keyword/hybrid search only after baseline evaluation | Simple measurable first implementation; avoid premature complexity. |
 | Ingestion | Background task interface; MVP may use FastAPI background task or a simple worker process | Keep slow parsing out of the HTTP request path. If reliability requires durable queues, add one later with tests and rationale. |
 | Local runtime | Docker Compose: API, UI, PostgreSQL/pgvector, optional Ollama | Reproducible local environment; local model resource needs depend on the developer's machine. |
@@ -63,6 +64,8 @@ The portfolio goal is to turn the existing enterprise knowledge-assistant experi
 | Cloud (later) | One provider only, likely AWS if target vacancies support it | Use managed Postgres, object storage, and container hosting only after local MVP works; monitor costs and destroy resources when not needed. |
 
 **Architecture style:** modular monolith, with `api`, `documents`, `ingestion`, `retrieval`, `generation`, `auth`, and `persistence` modules. The provider interfaces make later substitutions testable without creating a network of services. The initial source of truth for document status and metadata is PostgreSQL. For the MVP, files can live in a local data volume; cloud object storage is a later adapter, not a dependency.
+
+**Phase 0 choices (2026-10-28):** the authentication, document parsing, embeddings, and LLM rows above record the chosen configuration. Users upload whichever documents they are allowed to use; the repository ships only synthetic sample documents written for this project. Licenses, alternatives, and open points are in the [decision log](docs/tracker/03-decisions-risks-issues.md).
 
 ## 5. System context and deployment view
 
@@ -178,7 +181,7 @@ Authorize the caller; mark the document as deleting or unavailable; delete chunk
 ## 7. Proposed code layout
 
 ```text
-knowledge-assistant/
+evidence-backed-knowledge-assistant/
   backend/
     app/
       main.py                 # FastAPI app and lifecycle
@@ -189,8 +192,9 @@ knowledge-assistant/
       repositories/           # SQLAlchemy persistence adapters
       providers/              # parser, embedding, LLM, storage interfaces/adapters
       workers/                # ingestion worker entry point
-    migrations/               # Alembic migrations
+    alembic/                  # Alembic migrations (alembic.ini beside it)
     tests/                    # unit, integration, API tests
+    Dockerfile                # backend image, built from this folder
   frontend/
     src/
       api/                    # typed API client
@@ -199,17 +203,19 @@ knowledge-assistant/
       features/questions/      # question form, answer, citations
       features/workspaces/     # workspace selection
       routes/
+    Dockerfile                # frontend image, built from this folder
   evals/
     questions.jsonl           # authored questions and expected source IDs
     README.md                 # evaluation method and limits
   infra/
-    docker/                   # development container configuration
     terraform/                # optional cloud deployment, later phase
-  docker-compose.yml
+  compose.yaml                # local stack: API, UI, PostgreSQL/pgvector
   .github/workflows/ci.yml
   README.md
-  docs/                       # architecture, API, security, operations
+  docs/                       # architecture, API, security, operations; tracker/
 ```
+
+Folders are created when first needed. `alembic/`, `compose.yaml`, and a Dockerfile beside each build context follow the tools' own conventions.
 
 Keep modules small and explicit. The class diagram below is a conceptual domain/service design, not a requirement that every concept become a class. Use functions where they are clearer.
 
@@ -341,7 +347,8 @@ classDiagram
 
 ### Core tables
 
-- `users`: identity ID, normalized email, password hash only if using local password auth, created timestamp. For a portfolio demo, a mature auth library is preferable to custom password handling; alternatively use a clearly documented single-user local mode.
+- `users`: identity ID, normalized email, Argon2id password hash (from argon2-cffi, a maintained library; no custom password cryptography), created timestamp.
+- `user_sessions`: ID, user ID, hash of the random session token, created and expiry timestamps. The raw token exists only in the user's HttpOnly cookie.
 - `workspaces`: ID, name, owner ID, created timestamp.
 - `workspace_memberships`: workspace ID, user ID, role, unique constraint on the pair.
 - `documents`: ID, workspace ID, original display name, opaque storage key, MIME type, byte size, SHA-256, status, safe failure code/message, timestamps.
@@ -350,6 +357,7 @@ classDiagram
 
 ### Initial REST endpoints
 
+- `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me` — local accounts and the session cookie; registration can be turned off in settings. State-changing requests also require a custom header, so other local sites cannot forge them.
 - `POST /api/v1/workspaces` — create workspace.
 - `GET /api/v1/workspaces` — list accessible workspaces.
 - `POST /api/v1/workspaces/{workspace_id}/documents` — upload; returns `202` and document status.
@@ -441,6 +449,7 @@ Resume bullet template (replace brackets with verified values): “Built a Pytho
 ## 15. Decisions intentionally deferred
 
 - Hosted model vendor and exact model, based on privacy, cost, availability, and evaluation.
+- The exact local model tag, pinned when the model is first downloaded; a newer, permissively licensed small model may replace the default after evaluation.
 - Cloud provider and deployment service, pending current target-job research and cost estimate.
 - Whether durable queueing is needed, based on observed ingestion reliability and workload.
 - Keyword/hybrid search, reranking, and additional vector index tuning, based on evaluation evidence.

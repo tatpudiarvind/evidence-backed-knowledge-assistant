@@ -6,17 +6,17 @@ Counts are unweighted: a small task and a large one each count as one. Types: Bu
 
 ## Phase 0 — Confirm environment and decisions
 
-**Definition of done (spec):** the chosen configuration is written down, and the default path needs no paid account or real sensitive data. **Met:** ❌ No.
+**Definition of done (spec):** the chosen configuration is written down, and the default path needs no paid account or real sensitive data. **Met:** ✅ Yes, on 2026-10-28: the choices are recorded as D-32 – D-37 and in the spec, and the default path uses only free tools on this machine and synthetic sample documents.
 
 | ID | Task | Type | Status | Depends on | Evidence / output | Remarks |
 |---|---|---|---|---|---|---|
 | P0-01 | Check Python, Node.js, npm, and Docker versions | Verify | ✅ Done | — | [02-verification-log.md](02-verification-log.md), environment snapshot | Python 3.14.0, Node v24.18.1, and npm 11.16.0 found; Docker and Podman not found (B-01). Since 2026-10-27 this machine also has Python 3.12.15, Node 22.23.4, and PostgreSQL 16.15 with pgvector 0.8.0 under `D:\DevTools` (P1-31, P1-32) |
 | P0-02 | Check RAM, free disk, CPU, and GPU to size local models | Verify | ✅ Done | — | [02-verification-log.md](02-verification-log.md), environment snapshot and V-22 | About 32 GB RAM, 16 cores / 24 threads, an NVIDIA GPU with 8 GB VRAM, and more than 300 GB free on D:. Input for PD-03 and PD-05; no model has been run or measured yet |
-| P0-03 | Choose a small openly licensed or synthetic sample corpus; record source and license | Decision | ⏳ Not started | — | — | PD-02. Never real patient, employer-confidential, or unlicensed copyrighted material |
-| P0-04 | Decide the local auth mode | Decision | ⏳ Not started | — | — | PD-01. The spec prefers a mature auth library or a documented single-user local mode over custom password handling |
-| P0-05 | Choose the local embedding model and vector dimension | Decision | ⏳ Not started | P0-02 | — | PD-03. The dimension must be configuration, not hard-coded |
-| P0-06 | Decide the local LLM runtime (Ollama and model) or a retrieval-only fallback | Decision | ⏳ Not started | P0-02 | — | PD-05. Any hosted provider stays optional and opt-in |
-| P0-07 | Write down the chosen configuration (Phase 0 definition of done) | Docs | ⏳ Not started | P0-02 – P0-06 | — | Move the decisions from PD to D in [03-decisions-risks-issues.md](03-decisions-risks-issues.md) |
+| P0-03 | Choose a small openly licensed or synthetic sample corpus; record source and license | Decision | ✅ Done | — | D-33 in [03-decisions-risks-issues.md](03-decisions-risks-issues.md) | PD-02. Users upload the documents they need; the repository ships only synthetic documents written for this project (MIT). Never real patient, employer-confidential, or unlicensed copyrighted material |
+| P0-04 | Decide the local auth mode | Decision | ✅ Done | — | D-32; V-66 | PD-01. Local email-and-password accounts: Argon2id hashing with argon2-cffi, and server-side sessions in an HttpOnly cookie. Built in P2-01 and P2-14 |
+| P0-05 | Choose the local embedding model and vector dimension | Decision | ✅ Done | P0-02 | D-34; V-65 | PD-03. `BAAI/bge-small-en-v1.5` with 384 dimensions, set in configuration; all-MiniLM-L6-v2 as the fallback. Not downloaded yet (I-26) |
+| P0-06 | Decide the local LLM runtime (Ollama and model) or a retrieval-only fallback | Decision | ✅ Done | P0-02 | D-36; V-64, V-65 | PD-05. Ollama with Qwen3-4B-Instruct-2507, and search-only answers when no model is available (P4-11). Not downloaded yet (I-26). Any hosted provider stays optional and opt-in |
+| P0-07 | Write down the chosen configuration (Phase 0 definition of done) | Docs | ✅ Done | P0-02 – P0-06 | D-32 – D-37 in [03-decisions-risks-issues.md](03-decisions-risks-issues.md); spec §4, §7, §9, and §15 | PD-01 – PD-05 and PD-14 moved to decisions on 2026-10-28; the spec now names the chosen tools and the actual layout |
 
 ## Phase 1 — Repository and local foundation
 
@@ -24,7 +24,7 @@ Counts are unweighted: a small task and a large one each count as one. Types: Bu
 
 | ID | Task | Type | Status | Depends on | Evidence / output | Remarks |
 |---|---|---|---|---|---|---|
-| P1-01 | Create the monorepo layout (`backend/`, `frontend/`, root config, CI) | Build | ✅ Done | — | [05-project-reference.md](05-project-reference.md), file inventory | Minor naming differences from spec §7 (DEV-02 – DEV-07) |
+| P1-01 | Create the monorepo layout (`backend/`, `frontend/`, root config, CI) | Build | ✅ Done | — | [05-project-reference.md](05-project-reference.md), file inventory | Minor naming differences from spec §7 (DEV-01 – DEV-07). DEV-01 – DEV-03 and DEV-06 were resolved on 2026-10-28 by updating the spec (D-37) |
 | P1-02 | FastAPI app skeleton with typed settings (pydantic-settings) and a CORS allowlist | Build | ✅ Done | — | `backend/app/main.py`, `backend/app/core/config.py`; mypy strict passes (V-04) | CORS allows GET only for now (I-07) |
 | P1-03 | Health endpoints `GET /health/live` and `GET /health/ready` (database `SELECT 1`; generic 503 on failure) | Build | ✅ Done | P1-02 | `backend/app/api/health.py`; 3 pytest tests pass (V-05); on the host without a database, readiness returns 503 in about 6–7 s (V-32) | Tests mock the database check; live readiness is P1-20. Since 2026-10-27, connection attempts time out (default 3 s), so readiness no longer hangs (D-28, I-18); Compose passes the setting to the container (I-23) |
 | P1-04 | Pin backend direct dependencies exactly in `pyproject.toml` | Build | ✅ Done | — | `pip check` clean (V-01); `uv lock --check` passes (V-24) | Transitive versions are locked in `backend/uv.lock` (P1-24, D-22). fastapi, pytest, and the test transport were upgraded on 2026-10-27 (D-27) |
@@ -64,19 +64,20 @@ Counts are unweighted: a small task and a large one each count as one. Types: Bu
 
 | ID | Task | Type | Status | Depends on | Evidence / output | Remarks |
 |---|---|---|---|---|---|---|
-| P2-01 | Implement the identity/auth guard for the chosen auth mode | Build | ⏳ Not started | P0-04 | — | Authorization must not rely on the UI |
-| P2-02 | Migrations for `users`, `workspaces`, and `workspace_memberships` (unique workspace + user) | Build | ⏳ Not started | P1-19 or P1-31 | — | First real tables; verify against a live database. On this machine, use native PostgreSQL (P1-31), the main setup here (D-31) |
+| P2-01 | Implement the identity/auth guard for the chosen auth mode | Build | ⏳ Not started | P0-04 | — | Local accounts with Argon2id hashing and server-side sessions (D-32). Authorization must not rely on the UI |
+| P2-02 | Migrations for `users`, `user_sessions`, `workspaces`, and `workspace_memberships` (unique workspace + user) | Build | ⏳ Not started | P1-19 or P1-31 | — | First real tables; verify against a live database. On this machine, use native PostgreSQL (P1-31), the main setup here (D-31). `user_sessions` stores only a hash of each session token (D-32) |
 | P2-03 | Migration for `documents` (workspace ID, display name, opaque storage key, MIME type, size, SHA-256, status, safe failure code and message, timestamps) | Build | ⏳ Not started | P2-02 | — | Spec §9 |
 | P2-04 | Workspace endpoints `POST /api/v1/workspaces` and `GET /api/v1/workspaces` | Build | ⏳ Not started | P2-01, P2-02 | — | Introduces `app/api/v1/` routers (DEV-05) |
 | P2-05 | Enforce workspace authorization in service and repository queries | Security | ⏳ Not started | P2-01 | — | A guessed document ID must never bypass workspace checks (spec §6.3) |
-| P2-06 | Upload endpoint `POST /api/v1/workspaces/{workspace_id}/documents` returning `202` with status; size limit, PDF/DOCX/TXT allowlist, content-signature check, sanitized display name | Build | ⏳ Not started | P2-03, P2-07 | — | Rejected files get a clear 4xx response and are never indexed |
+| P2-06 | Upload endpoint `POST /api/v1/workspaces/{workspace_id}/documents` returning `202` with status; size limit, PDF/DOCX/TXT allowlist, content-signature check, sanitized display name | Build | ⏳ Not started | P2-03, P2-07 | — | One file per request (D-33): a rejected file gets a clear 4xx response, is never indexed, and doesn't affect the user's other files. Set the size limit and any per-workspace document limit here |
 | P2-07 | Local storage adapter with server-generated keys under the git-ignored `storage/` folder; path-traversal protection | Security | ⏳ Not started | — | — | Behind an interface so object storage can be added later |
 | P2-08 | Document endpoints: list, status/metadata, delete (`GET …/documents`, `GET /api/v1/documents/{document_id}`, `DELETE /api/v1/documents/{document_id}`) | Build | ⏳ Not started | P2-05 | — | Delete flow per spec §6.3; chunk removal is added in P3-12 |
 | P2-09 | Standard error JSON (stable code, message, request ID) and request-ID middleware | Build | ⏳ Not started | — | — | Never echo stack traces, credentials, or uploaded content |
-| P2-10 | Extend CORS for POST/DELETE and auth headers; settle where `.env` is read from | Build | ⏳ Not started | P2-01 | — | Resolves I-06 and I-07 |
-| P2-11 | Frontend: workspace selection, upload form, document list with status, delete | Build | ⏳ Not started | P2-04, P2-08 | — | Loading, empty, and error states; grow the typed API client (DEV-04) |
+| P2-10 | Extend CORS for POST/DELETE and auth headers; settle where `.env` is read from | Build | ⏳ Not started | P2-01 | — | Resolves I-06 and I-07. With session cookies (D-32), CORS must allow credentials and the custom request header, for the web app's own address only |
+| P2-11 | Frontend: workspace selection, upload form, document list with status, delete | Build | ⏳ Not started | P2-04, P2-08 | — | Users pick several files at once; each is uploaded separately with its own status and error (D-33). Loading, empty, and error states; grow the typed API client (DEV-04) |
 | P2-12 | Tests: cross-workspace list/query/download/delete is denied; invalid uploads are rejected | Test | ⏳ Not started | P2-05 – P2-08 | — | This is the Phase 2 definition of done |
 | P2-13 | Integration tests against real PostgreSQL (test container or Compose) | Test | ⏳ Not started | P1-17 or P1-31 | — | Spec §11: don't mock away the database behavior being claimed. On this machine they run against native PostgreSQL (P1-31, D-31); CI would need a PostgreSQL service container |
+| P2-14 | Auth endpoints (`POST /api/v1/auth/register`, `/login`, and `/logout`; `GET /api/v1/auth/me`) and the sign-in and registration screens | Build | ⏳ Not started | P2-01, P2-02 | — | D-32. Registration can be turned off in settings; the same error for an unknown email and a wrong password. Tests for hashing, session expiry, and logout |
 
 ## Phase 3 — Ingestion and semantic indexing
 
@@ -84,17 +85,17 @@ Counts are unweighted: a small task and a large one each count as one. Types: Bu
 
 | ID | Task | Type | Status | Depends on | Evidence / output | Remarks |
 |---|---|---|---|---|---|---|
-| P3-01 | License review and choice of PDF library | Decision | ⏳ Not started | — | — | PD-04: the spec names PyMuPDF (AGPL-3.0 or commercial license); compare permissive options such as pypdf or pdfminer.six |
-| P3-02 | Parser interface with PDF, DOCX, and TXT adapters that keep page/section metadata | Build | ⏳ Not started | P3-01 | — | DOCX via python-docx (spec §4) |
+| P3-01 | License review and choice of PDF library | Decision | ✅ Done | — | D-35; V-65, V-66 | PD-04, decided early in Phase 0: pypdf (BSD-3-Clause), with pypdfium2 as the fallback; PyMuPDF (AGPL-3.0 or commercial) is not used |
+| P3-02 | Parser interface with PDF, DOCX, and TXT adapters that keep page/section metadata | Build | ⏳ Not started | P3-01 | — | pypdf for PDF, python-docx for DOCX, UTF-8 for TXT (D-35). A scanned PDF without a text layer fails with a clear message (no OCR in the MVP) |
 | P3-03 | Text normalization that keeps source locations | Build | ⏳ Not started | P3-02 | — | — |
 | P3-04 | Configurable chunking (size and overlap) with boundary/overlap unit tests | Build | ⏳ Not started | P3-03 | — | — |
-| P3-05 | Embedding provider interface and local sentence-transformers adapter (batched; model and dimension from config) | Build | ⏳ Not started | P0-05 | — | The first run downloads model weights; record size and license |
-| P3-06 | Migration for `document_chunks` with a vector column, foreign-key indexes, and a vector index | Build | ⏳ Not started | P2-03, P0-05 | — | Choose the index type for the distance operator and the measured dataset size |
+| P3-05 | Embedding provider interface and local sentence-transformers adapter (batched; model and dimension from config) | Build | ⏳ Not started | P0-05 | — | `BAAI/bge-small-en-v1.5` via sentence-transformers (D-34). The first run downloads the model weights; record size and license. A real run here waits on I-26; tests use a fake embedder |
+| P3-06 | Migration for `document_chunks` with a vector column, foreign-key indexes, and a vector index | Build | ⏳ Not started | P2-03, P0-05 | — | 384 dimensions for the chosen model (D-34); a model with another dimension needs a new migration and re-embedding. Choose the index type for the distance operator and the measured dataset size |
 | P3-07 | Background ingestion with status `queued` → `processing` → `ready` / `failed` | Build | ⏳ Not started | P3-02 – P3-06 | — | FastAPI background task or a simple worker; durable queue deferred (PD-08) |
 | P3-08 | Idempotent retry (no duplicate chunks) and a retry action | Build | ⏳ Not started | P3-07 | — | — |
 | P3-09 | Safe failure codes and messages; logs without secrets or document text | Security | ⏳ Not started | P3-07 | — | — |
 | P3-10 | Parsing limits: maximum pages, parse timeout, malformed files, decompression bombs | Security | ⏳ Not started | P3-02 | — | Spec §12 |
-| P3-11 | Synthetic or licensed fixture documents with parser, chunker, and ingestion tests | Test | ⏳ Not started | P0-03 | — | This is the Phase 3 definition of done |
+| P3-11 | Synthetic or licensed fixture documents with parser, chunker, and ingestion tests | Test | ⏳ Not started | P0-03 | — | Synthetic documents written for this project (D-33). This is the Phase 3 definition of done |
 | P3-12 | Extend delete to remove chunks, vectors, and the stored file safely | Build | ⏳ Not started | P2-08, P3-06 | — | If storage deletion fails, report it instead of claiming success (spec §6.3) |
 
 ## Phase 4 — Grounded question answering
@@ -106,13 +107,14 @@ Counts are unweighted: a small task and a large one each count as one. Types: Bu
 | P4-01 | Question embedding and workspace-scoped pgvector retrieval (cosine) | Build | ⏳ Not started | P3-05, P3-06 | — | — |
 | P4-02 | Relevance threshold and abstention response (no fabricated citations) | Build | ⏳ Not started | P4-01 | — | Set the threshold from evaluation results, not guesswork (P5-02) |
 | P4-03 | Prompt builder with a context budget; retrieved text delimited as untrusted evidence | Security | ⏳ Not started | P4-01 | — | Reduces, but does not eliminate, prompt-injection risk |
-| P4-04 | LLM provider interface and local Ollama adapter; optional hosted adapter (opt-in and disclosed) | Build | ⏳ Not started | P0-06 | — | The model must never control authorization or tools |
+| P4-04 | LLM provider interface and local Ollama adapter; optional hosted adapter (opt-in and disclosed) | Build | ⏳ Not started | P0-06 | — | Ollama with Qwen3-4B-Instruct-2507 (D-36); pin the exact tag and re-check its license at the first download. A real run here waits on I-26. The model must never control authorization or tools |
 | P4-05 | Validate citations against the retrieved chunk IDs | Security | ⏳ Not started | P4-04 | — | Model-generated IDs and URLs are untrusted |
 | P4-06 | `POST /api/v1/workspaces/{workspace_id}/questions` returning answer, citations, and abstention flag | Build | ⏳ Not started | P4-02 – P4-05 | — | — |
 | P4-07 | Decide Q&A persistence and retention (`questions`, `answers`, `citations` tables are optional) | Decision | ⏳ Not started | — | — | Define retention and deletion before storing question text |
 | P4-08 | Answer UI: citations linked to document and page; loading, empty, error, and abstention states | Build | ⏳ Not started | P4-06 | — | — |
 | P4-09 | Integration tests: correct citations, no cross-workspace retrieval, abstention | Test | ⏳ Not started | P4-06, P2-13 | — | This is the Phase 4 definition of done |
 | P4-10 | Document model and provider limitations | Docs | ⏳ Not started | P4-04 | — | — |
+| P4-11 | Search-only mode: when no LLM is configured or reachable, return the best cited passages without generated text, and say so in the UI | Build | ⏳ Not started | P4-01, P4-02 | — | D-36. Keeps the app usable and testable without a model; still abstains when the evidence is weak |
 
 ## Phase 5 — Evaluation and hardening
 
@@ -120,7 +122,7 @@ Counts are unweighted: a small task and a large one each count as one. Types: Bu
 
 | ID | Task | Type | Status | Depends on | Evidence / output | Remarks |
 |---|---|---|---|---|---|---|
-| P5-01 | Manually reviewed evaluation set (`evals/questions.jsonl`): question, expected document/page, expected facts | Test | ⏳ Not started | P0-03 | — | Keep it small and honest; record the set size |
+| P5-01 | Manually reviewed evaluation set (`evals/questions.jsonl`): question, expected document/page, expected facts | Test | ⏳ Not started | P0-03 | — | Built from the project's synthetic documents (D-33). Keep it small and honest; record the set size |
 | P5-02 | Reproducible evaluation command measuring retrieval hit rate / recall@k and citation correctness; version the data and model/config | Test | ⏳ Not started | P5-01, P4-06 | — | No metrics exist yet. Publish only measured values with their conditions |
 | P5-03 | Robustness tests with unsupported questions and prompt-injection-like content | Security | ⏳ Not started | P4-06 | — | Robustness evidence, not proof of security |
 | P5-04 | Rate limits and request size limits | Security | ⏳ Not started | P2-06 | — | — |
@@ -146,7 +148,7 @@ Counts are unweighted: a small task and a large one each count as one. Types: Bu
 
 | ID | Task | Type | Status | Depends on | Evidence / output | Remarks |
 |---|---|---|---|---|---|---|
-| DOC-01 | Specification README (16 numbered sections, 4 Mermaid diagrams) | Docs | ✅ Done | — | [Project specification](../../README.md) | Source of truth; change it deliberately |
+| DOC-01 | Specification README (16 numbered sections, 4 Mermaid diagrams) | Docs | ✅ Done | — | [Project specification](../../README.md) | Source of truth; change it deliberately. Updated on 2026-10-28 with the Phase 0 choices (D-32 – D-37) |
 | DOC-02 | Project tracker in `docs/tracker/` | Docs | ✅ Done | — | This folder (6 files; `04-skills-evidence.md` is local only, D-21) | Created 2026-10-26 |
 | DOC-03 | Document the host-run workflow (API and web without Docker; `backend/.env` vs root `.env`) | Docs | 🔄 In progress | — | The README quickstart's "Without containers (no administrator rights)" section (P1-33, V-58 – V-60) | Related to I-06. Done since 2026-10-28: running the database, API, and web app on the host, without any `.env` file. Still open: which `.env` the backend reads on the host (`backend/.env` vs the root `.env`), which is untested (I-06) |
 | DOC-04 | Optional: short author background and motivation section in the README | Docs | ⏳ Not started | PD-12 | — | The spec mentions prior enterprise knowledge-assistant work only generically; review privacy before publishing |

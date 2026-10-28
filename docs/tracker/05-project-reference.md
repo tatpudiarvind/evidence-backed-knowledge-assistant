@@ -66,6 +66,17 @@ Reference data for the current code. Update it whenever files, dependencies, or 
 
 Transitive versions (for example starlette 1.10.0) are locked in `backend/uv.lock` (D-22). To change a version, edit `pyproject.toml` and update the lock file (section 8).
 
+### Chosen in Phase 0, not yet added
+
+Versions as checked on PyPI on 2026-10-28 (V-65); check again when adding them.
+
+| Package | Version checked | Scope | Purpose | Remarks |
+|---|---|---|---|---|
+| argon2-cffi | 25.1.0 | Runtime | Argon2id password hashing | MIT. Added in P2-01 (D-32); tried in V-66 |
+| pypdf | 6.21.3 | Runtime | PDF text, page by page | BSD-3-Clause. Added in P3-02 (D-35); tried in V-66. Fallback: pypdfium2 5.14.0 (BSD-3-Clause or Apache-2.0) |
+| python-docx | 1.2.0 | Runtime | DOCX text | MIT; brings lxml 6.1.3. Added in P3-02 (D-35); tried in V-66 |
+| sentence-transformers | 6.2.0 | Runtime | Local embeddings with `BAAI/bge-small-en-v1.5` | Apache-2.0; brings torch, whose Windows wheels on PyPI are CPU-only. Added in P3-05 (D-34); not tried yet. In Linux CI, install torch from PyTorch's CPU-only index to avoid the much larger GPU build |
+
 ## 3. Frontend dependencies (`frontend/package.json`)
 
 | Package | Version | Scope | Purpose | Remarks |
@@ -98,6 +109,9 @@ Transitive versions (for example starlette 1.10.0) are locked in `backend/uv.loc
 | Local Python | 3.14.0 (default); 3.12.15 under `D:\DevTools\python` | This machine | `backend\.venv` uses 3.14 (D-22). The 3.12 environment is `D:\DevTools\venvs\eka-backend-py312`, used by the backend checks on 3.12 (D-30, V-50) |
 | Local Node.js and npm | v24.18.1 and 11.16.0 (default); 22.23.4 and 10.9.9 under `D:\DevTools\node` | This machine | Node 22 isn't on PATH; the helper scripts in `D:\DevTools` put it first for their own process only (D-30, V-51) |
 | Local PostgreSQL with pgvector | PostgreSQL 16.15 with pgvector 0.8.0, under `D:\DevTools` | This machine only; the main database setup here (D-31) | D-29. Installed and checked in V-43 – V-47; the README's setup without containers was also checked with these binaries, on a throwaway cluster (V-59). Not part of the repository |
+| Ollama | v0.40.12, the latest release on 2026-10-28 | This machine, from P4-04 | Not installed. The portable Windows zip (1,527 MB) from Ollama's GitHub releases, to be unpacked under `D:\DevTools` and run on localhost only (D-36, V-64) |
+| Embedding model | `BAAI/bge-small-en-v1.5`; fallback `sentence-transformers/all-MiniLM-L6-v2` | Backend, from P3-05 | Not downloaded: the model site is blocked by the network policy on this machine (I-26). Tests use a fake embedder (D-34) |
+| Local LLM | Qwen3-4B-Instruct-2507, through Ollama | Ollama, from P4-04 | Not downloaded, for the same reason (I-26). Answers are search-only until a model is available (D-36, P4-11) |
 
 ## 5. Environment variables
 
@@ -133,6 +147,10 @@ Transitive versions (for example starlette 1.10.0) are locked in `backend/uv.loc
 | GET | `/health/live` | P1 | ✅ Implemented | Returns `{"status":"ok"}` |
 | GET | `/health/ready` | P1 | ✅ Implemented | 200 `{"status":"ok","database":"ok"}` or 503 `{"status":"unavailable","database":"unavailable"}`. Without a reachable database, 503 arrives in about 6–7 s on this machine (V-32, D-28), or about 3 s when `DATABASE_URL` uses `127.0.0.1` instead of `localhost` (I-25, V-48) |
 | GET | `/docs`, `/openapi.json` | P1 | ✅ FastAPI default | Not separately tested; consider disabling outside development |
+| POST | `/api/v1/auth/register` | P2 | ⏳ Planned | Create a local account; can be turned off in settings (D-32, P2-14) |
+| POST | `/api/v1/auth/login` | P2 | ⏳ Planned | Check the password and set the session cookie (D-32, P2-14) |
+| POST | `/api/v1/auth/logout` | P2 | ⏳ Planned | End the session and clear the cookie (P2-14) |
+| GET | `/api/v1/auth/me` | P2 | ⏳ Planned | The signed-in user (P2-14) |
 | POST | `/api/v1/workspaces` | P2 | ⏳ Planned | Create a workspace |
 | GET | `/api/v1/workspaces` | P2 | ⏳ Planned | List accessible workspaces |
 | POST | `/api/v1/workspaces/{workspace_id}/documents` | P2 | ⏳ Planned | Upload; returns `202` with status |

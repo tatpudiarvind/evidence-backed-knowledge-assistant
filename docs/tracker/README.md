@@ -3,11 +3,11 @@
 | Field | Value | Remarks |
 |---|---|---|
 | Last updated | 2026-10-28 | Update at the end of every work session |
-| Current stage | Phase 1 done — next: the Phase 0 decisions, then Phase 2 | A fresh clone starts on this machine without containers: checks, migration, API, web app, and the landing page's ready state all pass, on localhost only (V-58 – V-60). CI passes and also builds and runs the container stack on GitHub's Linux runner (V-36, V-61). Containers on this machine are on hold by choice: everything stays local, without a virtual machine or administrator rights (D-31) |
+| Current stage | Phases 0 and 1 done — next: Phase 2 | The Phase 0 choices were made on 2026-10-28 (D-32 – D-37). A fresh clone starts on this machine without containers: checks, migration, API, web app, and the landing page's ready state all pass, on localhost only (V-58 – V-60). CI passes and also builds and runs the container stack on GitHub's Linux runner (V-36, V-61). Containers on this machine are on hold by choice: everything stays local, without a virtual machine or administrator rights (D-31). The AI models can't be downloaded on this machine yet (I-26) |
 | Source of truth | [Project specification](../../README.md) | This tracker records progress against the spec; it does not replace it |
-| GitHub repository | [tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) | Created 2026-10-26 (public; MIT license since 2026-10-27, D-23). Pushed: foundation `f5f4edc` (2026-10-26); hygiene `d9e50be` and the Compose fix `81262e8` (2026-10-27); the setup without containers `e4ccbf4` (2026-10-28). CI passes (V-21, V-36, V-40, V-53, V-55, V-61). Personal notes stay local (D-21) |
-| AI/RAG features | None yet | By design: Phase 1 is foundation only |
-| Checks (2026-10-28) | 57 passed, 5 failed | Every failure has been fixed: V-03 by V-23, V-15 by V-17, V-26 by V-27, V-31 by V-32, V-34 by V-35. CI checks (V-21, V-36, V-40, V-53, V-55, V-61) ran on GitHub's runner, not this machine. V-42 – V-52 cover the tools installed under `D:\DevTools`; V-58 – V-60 cover the setup without containers from a fresh clone. Details in [02-verification-log.md](02-verification-log.md) |
+| GitHub repository | [tatpudiarvind/evidence-backed-knowledge-assistant](https://github.com/tatpudiarvind/evidence-backed-knowledge-assistant) | Created 2026-10-26 (public; MIT license since 2026-10-27, D-23). Pushed: foundation `f5f4edc` (2026-10-26); hygiene `d9e50be` and the Compose fix `81262e8` (2026-10-27); the setup without containers `e4ccbf4` (2026-10-28). CI passes (V-21, V-36, V-40, V-53, V-55, V-61, V-63). Personal notes stay local (D-21) |
+| AI/RAG features | None yet | The tools are chosen (D-32 – D-36); building starts in Phase 3 (ingestion) and Phase 4 (answers) |
+| Checks (2026-10-28) | 62 passed, 5 failed | Every failure has been fixed: V-03 by V-23, V-15 by V-17, V-26 by V-27, V-31 by V-32, V-34 by V-35. CI checks (V-21, V-36, V-40, V-53, V-55, V-61, V-63) ran on GitHub's runner, not this machine. V-42 – V-52 cover the tools installed under `D:\DevTools`; V-58 – V-60 cover the setup without containers from a fresh clone; V-64 – V-66 cover the Phase 0 research and library checks. Details in [02-verification-log.md](02-verification-log.md) |
 | Measured metrics | None | Evaluation is Phase 5; never publish unmeasured numbers |
 | Cloud resources / paid APIs | None | The default path stays local and free. Arvind prefers to keep everything on this machine for now (D-31) |
 
@@ -28,15 +28,15 @@ Counts come from [01-task-tracker.md](01-task-tracker.md). They are unweighted t
 
 | Phase | Focus | Status | Tasks | ✅ | 🟡 | 🔄 | ⏳ | ⛔ | ⏸️ | Definition of done met? | Remarks |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| P0 | Confirm environment and decisions | 🔄 In progress | 7 | 2 | 0 | 0 | 5 | 0 | 0 | ❌ No | Tool versions and hardware checked; corpus, auth, and model decisions still open (P0-03 – P0-07) |
+| P0 | Confirm environment and decisions | ✅ Done | 7 | 7 | 0 | 0 | 0 | 0 | 0 | ✅ Yes | Met on 2026-10-28: tools and hardware checked; sample documents, login, embedding model, PDF library, LLM, and layout chosen (D-32 – D-37) |
 | P1 | Repository and local foundation | ✅ Done | 33 | 29 | 0 | 0 | 0 | 0 | 4 | ✅ Yes | Met on 2026-10-28: a fresh clone starts on this machine without containers (P1-33; V-58 – V-60), and CI passes without secrets (V-36, V-61). The 4 deferred tasks run Compose on this machine, which is on hold (P1-17 – P1-20, D-31) |
-| P2 | Workspace and document lifecycle | ⏳ Not started | 13 | 0 | 0 | 0 | 13 | 0 | 0 | ❌ No | Phase 1 is done; start once the auth mode is decided (PD-01). Runs on this machine with the setup without containers (D-31) |
-| P3 | Ingestion and semantic indexing | ⏳ Not started | 12 | 0 | 0 | 0 | 12 | 0 | 0 | ❌ No | Needs corpus, embedding model, and PDF library decisions |
-| P4 | Grounded question answering | ⏳ Not started | 10 | 0 | 0 | 0 | 10 | 0 | 0 | ❌ No | Needs the local LLM runtime decision (PD-05) |
+| P2 | Workspace and document lifecycle | ⏳ Not started | 14 | 0 | 0 | 0 | 14 | 0 | 0 | ❌ No | Ready to start: Phase 1 is done and the login method is chosen (D-32). Runs on this machine with the setup without containers (D-31) |
+| P3 | Ingestion and semantic indexing | ⏳ Not started | 12 | 1 | 0 | 0 | 11 | 0 | 0 | ❌ No | Only the PDF library choice is done, decided early (P3-01, D-35). Running the real embedding model here waits on I-26; tests use a fake embedder |
+| P4 | Grounded question answering | ⏳ Not started | 11 | 0 | 0 | 0 | 11 | 0 | 0 | ❌ No | Ollama and the model are chosen (D-36), but the model can't be downloaded here yet (I-26); search-only answers (P4-11) work without it |
 | P5 | Evaluation and hardening | ⏳ Not started | 8 | 0 | 0 | 0 | 8 | 0 | 0 | ❌ No | No evaluation results exist yet |
 | P6 | Portfolio polish and optional deployment | ⏳ Not started | 6 | 0 | 0 | 0 | 4 | 0 | 2 | ❌ No | Cloud deployment is optional and deferred |
 | DOC | Documentation and tracking | 🔄 In progress | 5 | 2 | 0 | 2 | 1 | 0 | 0 | — | Spec and tracker done; upkeep ongoing. The host-run workflow is documented except which `.env` file the backend reads on the host (DOC-03, I-06) |
-| **Total** | | | **94** | **33** | **0** | **2** | **53** | **0** | **6** | | |
+| **Total** | | | **96** | **39** | **0** | **2** | **49** | **0** | **6** | | |
 
 ## Blockers
 
@@ -55,17 +55,17 @@ The GitHub repository is public, and anything pushed stays in git history. Run t
 | 2 | Decide whether to publish `04-skills-evidence.md` | ✅ Kept local | PD-12, D-21 | Git-ignored. To publish it, remove its line from `.gitignore` and commit it |
 | 3 | Choose the commit author email | ✅ No-reply address | PD-15, D-20 | Set for this repository only; the global git identity is unchanged |
 | 4 | Choose a license | ✅ MIT | PD-16, D-23 | Chosen by Arvind on 2026-10-27 |
-| 5 | Make sure the repository description matches what's built | ✅ Done | D-25 | Updated 2026-10-27 with owner-approved text that marks the project as work in progress. Reviewed on 2026-10-28, when Phase 1 was done: it still matches what's built. Review it whenever a phase completes |
-| 6 | Scan for secrets, internal hostnames, and personal data | ✅ Done | V-16, V-20, V-37, V-39, V-41, V-54, V-57, V-62, R-13 | Staged files scanned before every push so far; repeat before every push |
+| 5 | Make sure the repository description matches what's built | ✅ Done | D-25 | Updated 2026-10-27 with owner-approved text that marks the project as work in progress. Reviewed on 2026-10-28, when Phase 1 was done: it still matches what's built. Reviewed again the same day after Phase 0, which added decisions but no features: still matches. Review it whenever a phase completes |
+| 6 | Scan for secrets, internal hostnames, and personal data | ✅ Done | V-16, V-20, V-37, V-39, V-41, V-54, V-57, V-62, V-67, R-13 | Staged files scanned before every push so far; repeat before every push |
 | 7 | `.env`, virtual environments, `node_modules`, and local data are git-ignored | ✅ Done | P1-11, V-20 | Confirmed with `git status` after `git init` |
 
 ## Next actions (in order)
 
 | # | Action | Task IDs | Who | Remarks |
 |---|---|---|---|---|
-| 1 | Make the Phase 0 decisions and write down the configuration | P0-03 – P0-07 (PD-01, PD-02, PD-03, PD-05) | Arvind | Needed before Phases 2–4. Hardware is checked (P0-02). Prefer options that run on this machine without administrator rights (D-31) |
-| 2 | Optional small fixes | I-08, I-20, I-21, I-25, DOC-03 (I-06) | Implementation session | Not blocking; push code changes through a branch so CI checks them first ([commands](05-project-reference.md#8-commands)) |
-| 3 | Start Phase 2 | P2-01 onward | Implementation session | Phase 1 is done (2026-10-28); start once the auth mode is decided (PD-01). The first tables and integration tests run on this machine against native PostgreSQL (P2-02, P2-13; D-31) |
+| 1 | Start Phase 2: accounts and sign-in, workspaces, and document upload, list, and delete | P2-01 – P2-14 | Implementation session | Phases 0 and 1 are done. The first tables and integration tests run on this machine against native PostgreSQL (P2-02, P2-13; D-31) |
+| 2 | Decide how to get the AI models onto this machine | I-26, NV-10 | Arvind | The network policy blocks the model sites here. Options: download the files in a browser if your employer's policy allows it, or ask IT for an exception. Not needed for Phase 2; meanwhile tests use a fake embedder and answers can be search-only |
+| 3 | Optional small fixes | I-08, I-20, I-21, I-25, DOC-03 (I-06) | Implementation session | Not blocking; push code changes through a branch so CI checks them first ([commands](05-project-reference.md#8-commands)) |
 | 4 | Optional: ask IT to enable WSL 2 or Hyper-V, only if you want containers on this machine | PD-13, P1-17 – P1-20 | Arvind | Not needed for development (D-31). CI runs the container stack on every push (V-61) |
 
 ## Tracker files
@@ -131,3 +131,6 @@ The GitHub repository is public, and anything pushed stays in git history. Run t
 | 2026-10-28 | Vite listens on localhost only, and the README documents a setup without containers (commit `e4ccbf4`, pushed on branch `native-local-path`) | ✅ | I-24 resolved; P1-33. Scanned first (V-57); checked from a fresh clone (V-58 – V-60); all 3 CI jobs passed (V-61) |
 | 2026-10-28 | Phase 1 definition of done met | ✅ | A fresh clone starts on this machine without containers, and CI passes without secrets (P1-16, P1-33). The repository description still matches what's built (D-25) |
 | 2026-10-28 | Recorded this work in the tracker; `main` fast-forwarded to the branch commit and pushed with this update | ✅ | Staged files scanned first (V-62). CI for the previous push passed (V-55). The branch is deleted once `main` passes CI |
+| 2026-10-28 | Researched the Phase 0 options: licenses, versions, and download sites; tried the parsing and password-hashing libraries on Python 3.12 and 3.14 | ✅ | V-64 – V-66. The model sites (Hugging Face and Ollama's model library) are blocked by the network policy on this machine (I-26); not bypassed |
+| 2026-10-28 | Arvind answered the Phase 0 decisions and left the details to the assistant; recorded the choices and updated the spec (§4, §7, §9, §15) | ✅ | D-32 – D-37. Phase 0 definition of done met. P3-01 done early; new tasks P2-14 and P4-11 |
+| 2026-10-28 | Recorded this work in the tracker and pushed it to `main` | ✅ | Staged files scanned first (V-67). CI for the previous push passed (V-63), and branch `native-local-path` was deleted |
