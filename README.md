@@ -55,7 +55,7 @@ The portfolio goal is to turn the existing enterprise knowledge-assistant experi
 | ORM/migrations | SQLAlchemy 2 + Alembic | Explicit schema models and repeatable migrations. |
 | Document parsing | pypdf for PDF (pypdfium2 as fallback), python-docx for DOCX, UTF-8 decoding for TXT | Permissive licenses (BSD-3-Clause, MIT) that suit the MIT-licensed repository; PyMuPDF is AGPL-3.0 or commercial. Keep parsing isolated behind an interface; preserve page/section metadata where possible. No OCR in the MVP: a scanned PDF without a text layer fails with a clear message. |
 | Embeddings | Sentence Transformers with `BAAI/bge-small-en-v1.5` (384 dimensions, MIT) on CPU; `all-MiniLM-L6-v2` (384 dimensions, Apache-2.0) as fallback | Local, repeatable, no per-call API bill; model and vector dimensions are configuration, not hard-coded assumptions. Tests use a deterministic fake embedder. |
-| LLM | Provider interface; local Ollama adapter first (default model Qwen3-4B-Instruct-2507, Apache-2.0; exact tag pinned at first download); search-only mode (cited passages, no generated text) when no model is available; optional hosted adapter later | Local development avoids mandatory paid API; hosted provider is opt-in and clearly disclosed. |
+| LLM | Provider interface; local Ollama adapter first (default model Qwen3-4B-Instruct-2507, Apache-2.0, pinned as the Ollama tag `qwen3:4b-instruct-2507-q4_K_M`); search-only mode (cited passages, no generated text) when no model is available; optional hosted adapter later | Local development avoids mandatory paid API; hosted provider is opt-in and clearly disclosed. |
 | Retrieval | pgvector cosine similarity; add keyword/hybrid search only after baseline evaluation | Simple measurable first implementation; avoid premature complexity. |
 | Ingestion | Background task interface; MVP may use FastAPI background task or a simple worker process | Keep slow parsing out of the HTTP request path. If reliability requires durable queues, add one later with tests and rationale. |
 | Local runtime | Docker Compose: API, UI, PostgreSQL/pgvector, optional Ollama | Reproducible local environment; local model resource needs depend on the developer's machine. |
@@ -449,7 +449,7 @@ Resume bullet template (replace brackets with verified values): “Built a Pytho
 ## 15. Decisions intentionally deferred
 
 - Hosted model vendor and exact model, based on privacy, cost, availability, and evaluation.
-- The exact local model tag, pinned when the model is first downloaded; a newer, permissively licensed small model may replace the default after evaluation.
+- Whether a newer, permissively licensed small model should replace the default local model (`qwen3:4b-instruct-2507-q4_K_M`), based on evaluation.
 - Cloud provider and deployment service, pending current target-job research and cost estimate.
 - Whether durable queueing is needed, based on observed ingestion reliability and workload.
 - Keyword/hybrid search, reranking, and additional vector index tuning, based on evaluation evidence.
