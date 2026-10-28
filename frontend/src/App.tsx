@@ -1,101 +1,135 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { getReadiness } from "./lib/api";
+import { type User, getCurrentUser, signOut } from "./api/auth";
+import ErrorNotice from "./components/ErrorNotice";
+import AuthCard from "./features/auth/AuthCard";
+import WorkspaceHome from "./features/workspaces/WorkspaceHome";
 
-type ReadinessState = "checking" | "ready" | "unavailable";
+type Session =
+  | { state: "checking" }
+  | { state: "signed-out"; notice: string | null }
+  | { state: "signed-in"; user: User };
+
+const SESSION_ENDED_NOTICE = "Your session has ended. Sign in again to continue.";
+const SIGNED_OUT_NOTICE = "You've signed out.";
 
 export default function App() {
-  const [state, setState] = useState<ReadinessState>("checking");
-  const [attempt, setAttempt] = useState(0);
+  const [session, setSession] = useState<Session>({ state: "checking" });
+  const [signingOut, setSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState<unknown>(null);
 
   useEffect(() => {
     const controller = new AbortController();
-    setState("checking");
-
-    getReadiness(controller.signal)
-      .then(() => setState("ready"))
+    getCurrentUser(controller.signal)
+      .then((user) =>
+        setSession(user ? { state: "signed-in", user } : { state: "signed-out", notice: null }),
+      )
       .catch(() => {
+        // The sign-in card reports whether the API is reachable.
         if (!controller.signal.aborted) {
-          setState("unavailable");
+          setSession({ state: "signed-out", notice: null });
         }
       });
-
     return () => controller.abort();
-  }, [attempt]);
+  }, []);
 
-  const statusText = {
-    checking: "Checking local services",
-    ready: "API and database are ready",
-    unavailable: "API or database is unavailable",
-  }[state];
+  const handleSignedIn = useCallback((user: User) => {
+    setSignOutError(null);
+    setSession({ state: "signed-in", user });
+  }, []);
+
+  const handleSessionExpired = useCallback(() => {
+    setSignOutError(null);
+    setSession({ state: "signed-out", notice: SESSION_ENDED_NOTICE });
+  }, []);
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    setSignOutError(null);
+    try {
+      await signOut();
+      setSession({ state: "signed-out", notice: SIGNED_OUT_NOTICE });
+    } catch (error) {
+      setSignOutError(error);
+    } finally {
+      setSigningOut(false);
+    }
+  }
 
   return (
-    <main className="page-shell">
-      <nav className="topbar" aria-label="Main navigation">
+    <div className="page-shell">
+      <header className="topbar">
         <a className="brand" href="/" aria-label="Evidence-backed home">
           <span className="brand-mark" aria-hidden="true">
             E
           </span>
           <span>Evidence-backed</span>
         </a>
-        <span className="topbar-note">A local-first knowledge workspace</span>
-      </nav>
-
-      <section className="hero" aria-labelledby="hero-title">
-        <div className="hero-copy">
-          <p className="eyebrow">KNOWLEDGE, WITH ITS SOURCES</p>
-          <h1 id="hero-title">
-            Good answers
-            <br />
-            <span>show their work.</span>
-          </h1>
-          <p className="hero-description">
-            A private place to explore your documents and get answers grounded in the evidence —
-            with clear citations, and an honest “not enough information” when the sources fall
-            short.
-          </p>
-          <div className="hero-note">
-            <span aria-hidden="true">✳</span>
-            <p>Designed for your local workspace. Your documents stay yours.</p>
-          </div>
-        </div>
-
-        <aside className="status-card" aria-labelledby="status-title">
-          <div className="card-topline">
-            <span className="card-kicker">YOUR WORKSPACE</span>
-            <span className={`status-indicator status-${state}`} aria-hidden="true" />
-          </div>
-          <div className="status-icon" aria-hidden="true">
-            <svg viewBox="0 0 48 48" fill="none">
-              <path d="M11 8.5h17l9 9v22H11z" />
-              <path d="M28 8.5v10h9M17 27h14M17 33h14" />
-              <path d="m18 19 3 3 6-6" />
-            </svg>
-          </div>
-          <h2 id="status-title">A clear foundation.</h2>
-          <p className="status-description">
-            Your local services are the first step toward an evidence-ready library.
-          </p>
-          <div className={`health-row health-${state}`} role="status" aria-live="polite">
-            <span className="health-dot" aria-hidden="true" />
-            <span>{statusText}</span>
-          </div>
-          {state === "unavailable" && (
-            <button className="retry-button" onClick={() => setAttempt((value) => value + 1)}>
-              Check again
+        {session.state === "signed-in" ? (
+          <div className="account">
+            <span className="account-email" title={session.user.email}>
+              <span className="visually-hidden">Signed in as </span>
+              {session.user.email}
+            </span>
+            <button
+              type="button"
+              className="button button-quiet button-small"
+              onClick={handleSignOut}
+              disabled={signingOut}
+            >
+              {signingOut ? "Signing out…" : "Sign out"}
             </button>
-          )}
-          <div className="card-footer">
-            <span>LOCAL DEVELOPMENT</span>
-            <span>PHASE 01 / FOUNDATION</span>
           </div>
-        </aside>
-      </section>
+        ) : (
+          <span className="topbar-note">A local-first knowledge workspace</span>
+        )}
+      </header>
+
+      {session.state === "signed-in" && signOutError !== null && (
+        <div className="page-alert">
+          <ErrorNotice error={signOutError} />
+        </div>
+      )}
+
+      {session.state === "checking" && (
+        <main className="session-check">
+          <p className="delayed-status" role="status">
+            Checking your session…
+          </p>
+        </main>
+      )}
+
+      {session.state === "signed-out" && (
+        <main className="hero" aria-labelledby="hero-title">
+          <div className="hero-copy">
+            <p className="eyebrow">KNOWLEDGE, WITH ITS SOURCES</p>
+            <h1 id="hero-title">
+              Good answers
+              <br />
+              <span>show their work.</span>
+            </h1>
+            <p className="hero-description">
+              A private place to explore your documents and get answers grounded in the evidence —
+              with clear citations, and an honest “not enough information” when the sources fall
+              short.
+            </p>
+            <div className="hero-note">
+              <span aria-hidden="true">✳</span>
+              <p>Designed for your local workspace. Your documents stay yours.</p>
+            </div>
+          </div>
+          <AuthCard notice={session.notice} onSignedIn={handleSignedIn} />
+        </main>
+      )}
+
+      {session.state === "signed-in" && (
+        <WorkspaceHome key={session.user.id} onSessionExpired={handleSessionExpired} />
+      )}
 
       <footer className="page-footer">
         <span>Evidence before answers.</span>
         <span>Built to keep the source in view.</span>
       </footer>
-    </main>
+    </div>
   );
 }

@@ -13,9 +13,27 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      # Integration tests run against real PostgreSQL with pgvector (spec section 11).
+      postgres:
+        image: pgvector/pgvector:0.8.0-pg16
+        env:
+          POSTGRES_DB: knowledge_assistant_test
+          POSTGRES_USER: knowledge_assistant
+          POSTGRES_PASSWORD: local_dev_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U knowledge_assistant -d knowledge_assistant_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       UV_PYTHON: "3.12"
       UV_PYTHON_DOWNLOADS: never
+      TEST_DATABASE_URL: postgresql+psycopg://knowledge_assistant:local_dev_only@localhost:5432/knowledge_assistant_test
+      # Fail, rather than skip, the integration tests if the database is unreachable.
+      TEST_DATABASE_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -84,6 +102,30 @@ jobs:
           curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors http://localhost:8000/health/ready
           echo
           curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors --output /dev/null http://localhost:5173/
+      - name: Check sign-up, upload, download, and delete through the API
+        run: |
+          api=http://localhost:8000/api/v1
+          jar="$(mktemp)"
+          printf 'Synthetic smoke-test text.\n' > /tmp/smoke.txt
+          curl --fail --silent --show-error -c "$jar" \
+            -H 'Content-Type: application/json' -H 'X-CSRF-Protection: 1' \
+            -d '{"email":"smoke@example.com","password":"compose smoke test password"}' \
+            "$api/auth/register"
+          echo
+          workspace_id="$(curl --fail --silent --show-error -b "$jar" \
+            -H 'Content-Type: application/json' -H 'X-CSRF-Protection: 1' \
+            -d '{"name":"Smoke test"}' "$api/workspaces" | jq -r .id)"
+          document="$(curl --fail --silent --show-error -b "$jar" -H 'X-CSRF-Protection: 1' \
+            -F 'file=@/tmp/smoke.txt;filename=smoke.txt' "$api/workspaces/$workspace_id/documents")"
+          echo "$document"
+          test "$(echo "$document" | jq -r .status)" = "queued"
+          document_id="$(echo "$document" | jq -r .id)"
+          curl --fail --silent --show-error -b "$jar" "$api/documents/$document_id/file" \
+            | cmp - /tmp/smoke.txt
+          curl --fail --silent --show-error -b "$jar" -H 'X-CSRF-Protection: 1' \
+            -X DELETE "$api/documents/$document_id"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' -b "$jar" \
+            "$api/documents/$document_id")" = "404"
       - name: Check readiness reports 503 when the database stops
         run: |
           docker compose stop db

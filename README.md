@@ -110,7 +110,7 @@ sequenceDiagram
     participant FS as Local file storage
 
     User->>UI: Select file and submit
-    UI->>API: POST /api/v1/documents (multipart)
+    UI->>API: POST /api/v1/workspaces/{id}/documents (multipart)
     API->>Auth: Validate identity and workspace access
     Auth-->>API: Authorized principal
     API->>DS: create_document(file, workspace)
@@ -185,24 +185,28 @@ evidence-backed-knowledge-assistant/
   backend/
     app/
       main.py                 # FastAPI app and lifecycle
-      api/v1/                 # routers and request/response schemas
-      core/                   # settings, auth, errors, logging
-      domain/                 # entities, enums, domain rules
-      services/               # document, ingestion, Q&A use cases
+      api/                    # health checks and shared request dependencies
+      api/v1/                 # routers, request/response schemas, streamed uploads
+      core/                   # settings, database, errors, middleware, passwords, sessions
+      db/                     # SQLAlchemy models
+      domain/                 # domain rules: file types, display names, roles
+      services/               # auth, workspace, document use cases; ingestion and Q&A later
       repositories/           # SQLAlchemy persistence adapters
-      providers/              # parser, embedding, LLM, storage interfaces/adapters
-      workers/                # ingestion worker entry point
+      providers/              # storage adapter; parser, embedding, LLM adapters later
+      workers/                # ingestion worker entry point (Phase 3)
     alembic/                  # Alembic migrations (alembic.ini beside it)
+    storage/                  # uploaded files when the API runs on the host (git-ignored)
     tests/                    # unit, integration, API tests
     Dockerfile                # backend image, built from this folder
   frontend/
     src/
-      api/                    # typed API client
-      components/             # reusable UI components
-      features/documents/      # upload, list, state, delete
-      features/questions/      # question form, answer, citations
-      features/workspaces/     # workspace selection
-      routes/
+      api/                    # typed API client with runtime response checks
+      components/             # shared UI pieces
+      features/auth/          # sign-in, registration, service status
+      features/workspaces/    # workspace list, creation, selection
+      features/documents/     # upload queue, list, status, download, delete
+      features/questions/     # question form, answer, citations (Phase 4)
+      test/                   # shared test setup and API fakes
     Dockerfile                # frontend image, built from this folder
   evals/
     questions.jsonl           # authored questions and expected source IDs
@@ -215,7 +219,7 @@ evidence-backed-knowledge-assistant/
   docs/                       # architecture, API, security, operations; tracker/
 ```
 
-Folders are created when first needed. `alembic/`, `compose.yaml`, and a Dockerfile beside each build context follow the tools' own conventions.
+Folders are created when first needed. `alembic/`, `compose.yaml`, and a Dockerfile beside each build context follow the tools' own conventions. The frontend has no client-side router yet, because each state (signed out, first workspace, workspace) is a single screen; add a `routes/` folder if pages need their own URLs.
 
 Keep modules small and explicit. The class diagram below is a conceptual domain/service design, not a requirement that every concept become a class. Use functions where they are clearer.
 
@@ -360,14 +364,15 @@ classDiagram
 - `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me` — local accounts and the session cookie; registration can be turned off in settings. State-changing requests also require a custom header, so other local sites cannot forge them.
 - `POST /api/v1/workspaces` — create workspace.
 - `GET /api/v1/workspaces` — list accessible workspaces.
-- `POST /api/v1/workspaces/{workspace_id}/documents` — upload; returns `202` and document status.
-- `GET /api/v1/workspaces/{workspace_id}/documents` — list documents and ingestion status.
+- `POST /api/v1/workspaces/{workspace_id}/documents` — upload one file per request (multipart field `file`); returns `202` and the queued document. Accepts PDF, DOCX, and TXT up to 10 MiB by default (`MAX_UPLOAD_BYTES`), checks the content matches the file type, and allows up to 100 documents per workspace by default (`MAX_DOCUMENTS_PER_WORKSPACE`).
+- `GET /api/v1/workspaces/{workspace_id}/documents` — list documents and ingestion status, newest first.
 - `GET /api/v1/documents/{document_id}` — get status/metadata, after authorization.
+- `GET /api/v1/documents/{document_id}/file` — download the original file as an attachment, after authorization; responses are not cached.
 - `DELETE /api/v1/documents/{document_id}` — delete document and indexed chunks.
 - `POST /api/v1/workspaces/{workspace_id}/questions` — ask a question; returns answer, citations, and abstention flag.
 - `GET /health/live` and `/health/ready` — process and dependency readiness; do not leak credentials/configuration.
 
-Use consistent error JSON with a stable code, human-readable message, and request ID. Never echo stack traces, provider credentials, or uploaded content in error responses.
+Use consistent error JSON with a stable code, human-readable message, and request ID: `{"error": {"code": "...", "message": "...", "request_id": "...", "fields": [...]}}`, where `fields` lists invalid inputs and appears only for validation errors. Every response carries the same ID in an `X-Request-ID` header, so a user can quote it and it can be found in the logs. A workspace or document the caller cannot access returns `404`, the same as one that does not exist, so IDs reveal nothing. Never echo stack traces, provider credentials, or uploaded content in error responses.
 
 ## 10. Implementation roadmap and definition of done
 
@@ -383,7 +388,7 @@ Use consistent error JSON with a stable code, human-readable message, and reques
 - **Done when:** a clean checkout starts locally and CI passes without secrets.
 
 ### Phase 2 — Workspace and document lifecycle
-- Implement identity/auth guard, workspace ownership, migrations, upload validation, storage adapter, document list/status/delete endpoints and UI.
+- Implement identity/auth guard, workspace ownership, migrations, upload validation, storage adapter, document list/status/download/delete endpoints and UI.
 - Validate actual content signatures where practical; sanitize display names; generate storage paths server-side; set explicit file-size limits.
 - **Done when:** tests prove unauthorized users cannot list, query, download, or delete another workspace's documents; invalid uploads are rejected.
 
@@ -459,18 +464,22 @@ Resume bullet template (replace brackets with verified values): “Built a Pytho
 
 The first coding milestone should be **Phase 1 only**: create a clean repository foundation with Docker Compose, health checks, configuration, migrations setup, CI, and a minimal React/FastAPI shell. Verify a new checkout starts and tests pass before implementing ingestion or AI. This keeps the project incremental and makes each skill demonstrable through real code rather than a large untested first commit.
 
-## Phase 1 foundation quickstart
+## Local quickstart
 
-The initial scaffold is in place; it provides the API and database readiness checks plus a minimal web landing page. It does **not** yet implement workspaces, document ingestion, retrieval, or AI generation.
+What works today (Phases 1 and 2): create a local account and workspaces, then upload, list, download, and delete PDF, Word (.docx), and plain-text files. Uploaded documents stay **Queued**, because text extraction, indexing, retrieval, and answers arrive in Phases 3 and 4. Upload only documents you are allowed to use, and never real patient or confidential data.
 
-From the project root, copy `.env.example` to `.env`, then run:
+From the project root, copy `.env.example` to `.env`; Docker Compose, the API, and the Vite dev server all take their settings from this one file. Then run:
 
 ```powershell
 docker compose up --build -d
 docker compose run --rm backend alembic upgrade head
 ```
 
-Open `http://localhost:5173`; the page reports whether the API and PostgreSQL are ready. The API health endpoints are `http://localhost:8000/health/live` and `http://localhost:8000/health/ready`. Backend dependencies are locked in `backend/uv.lock`; install [uv](https://docs.astral.sh/uv/getting-started/installation/) first (CI uses uv 0.13.5). Run backend checks from `backend` with `uv sync --locked --extra dev`, then `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy app`, and `uv run pytest`; run frontend checks from `frontend` with `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`. Stop local services with `docker compose down`; add `-v` only if you intentionally want to delete the local database volume.
+Open `http://localhost:5173`, check that the page reports the API and database as ready, and create an account. Registration is open by default; set `REGISTRATION_ENABLED=false` in `.env` once your accounts exist. The API health endpoints are `http://localhost:8000/health/live` and `http://localhost:8000/health/ready`. Uploaded files go to the `document_storage` volume under Compose, or to `backend/storage` (ignored by git) when the API runs directly on your machine; set `STORAGE_DIR` to put them elsewhere.
+
+Backend dependencies are locked in `backend/uv.lock`; install [uv](https://docs.astral.sh/uv/getting-started/installation/) first (CI uses uv 0.13.5). Run backend checks from `backend` with `uv sync --locked --extra dev`, then `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy app`, and `uv run pytest`. The API and database tests need PostgreSQL: they use their own database, `knowledge_assistant_test` on `localhost:5432` with the development credentials, which they create and migrate when needed and empty before each test. Set `TEST_DATABASE_URL` to use another database; its name must end in `_test`. Without a reachable server those tests are skipped; set `TEST_DATABASE_REQUIRED=1`, as CI does, to make them fail instead. Run frontend checks from `frontend` with `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`.
+
+Stop local services with `docker compose down`; add `-v` only if you intentionally want to delete the local database and the uploaded files, which both live in Compose volumes.
 
 ### Without containers (no administrator rights)
 
@@ -487,7 +496,7 @@ One-time setup:
    createdb -U knowledge_assistant knowledge_assistant
    ```
 
-   `initdb -U knowledge_assistant` makes that user the cluster's superuser, which the first migration needs for `CREATE EXTENSION vector`. Use this cluster for local development only.
+   `initdb -U knowledge_assistant` makes that user the cluster's superuser, which the first migration needs for `CREATE EXTENSION vector` and the backend tests need to create their own database. Use this cluster for local development only.
 
 To run the app, start the database if it isn't running (`pg_ctl -D <data-folder> -l <log-file> start`). Then, from `backend`:
 
@@ -504,7 +513,7 @@ npm ci
 npm run dev
 ```
 
-`uv sync` and `npm ci` are only needed after a fresh clone or a lock file change. Open `http://localhost:5173`; the page should report that the API and database are ready. PostgreSQL, the API, and the Vite dev server listen on localhost only, so other machines on your network can't reach them. Stop the web app and the API with Ctrl+C, then the database with `pg_ctl -D <data-folder> stop`. This database and the Compose `db` service both use port 5432: run only one of them, or set `POSTGRES_PORT` in `.env` to move the Compose one.
+`uv sync` and `npm ci` are only needed after a fresh clone or a lock file change. Open `http://localhost:5173`; the page should report that the API and database are ready, and you can create an account. PostgreSQL, the API, and the Vite dev server listen on localhost only, so other machines on your network can't reach them. Stop the web app and the API with Ctrl+C, then the database with `pg_ctl -D <data-folder> stop`. This database and the Compose `db` service both use port 5432: run only one of them, or set `POSTGRES_PORT` in `.env` to move the Compose one.
 
 ## License
 
