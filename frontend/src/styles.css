@@ -465,11 +465,12 @@ h1 {
   text-underline-offset: 3px;
 }
 
-.button-link:hover:not(:disabled) {
+.button-link:hover:not(:disabled, [aria-disabled="true"]) {
   color: var(--accent-hover);
 }
 
-.button-link:disabled {
+.button-link:disabled,
+.button-link[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.6;
 }

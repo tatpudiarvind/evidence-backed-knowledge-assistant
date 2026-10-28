@@ -59,7 +59,8 @@ Reference data for the current code. Update it whenever files, dependencies, or 
 | `frontend/package.json`, `frontend/package-lock.json` | Pinned dependencies, scripts, lockfile | ✅ | Build tools are devDependencies since 2026-10-27 (P1-27). The lockfile records no registry URLs (D-19) |
 | `frontend/.npmrc` | Keeps registry URLs out of `package-lock.json` (`omit-lockfile-registry-resolved=true`) | ✅ | D-19; installs work from any npm registry |
 | `frontend/Dockerfile`, `frontend/.dockerignore` | Dev image (Node 22, Vite dev server) | ✅ | Built and run in CI (V-36, V-61); not built on this machine (on hold, D-31). Starts Vite with `--host 0.0.0.0` itself, so the container doesn't depend on `vite.config.ts` for that (I-24) |
-| `frontend/index.html` | HTML entry point | ✅ | — |
+| `frontend/index.html` | HTML entry point | ✅ | Links the favicon (I-21) |
+| `frontend/public/favicon.svg` | Favicon: the brand mark, a light "E" on the brand green, drawn as shapes so it needs no font | ✅ | I-21. Vite serves `public/` as is and copies it into the build |
 | `frontend/vite.config.ts` | Vite and Vitest (jsdom) configuration | ✅ | No `server.host` since 2026-10-28, so a host run listens on localhost only (I-24; V-60). Reads `.env` from the repository root (`envDir`, D-40) |
 | `frontend/tsconfig.json` | Strict TypeScript configuration | ✅ | — |
 | `frontend/eslint.config.js` | ESLint flat configuration | ✅ | — |
@@ -68,12 +69,12 @@ Reference data for the current code. Update it whenever files, dependencies, or 
 | `frontend/src/api/client.ts`, `frontend/src/api/parse.ts` | Shared API client (session cookie, CSRF header, `ApiError` from the error contract, downloads as blobs) and runtime response checks | ✅ | D-44. Replaced `src/lib/api.ts` on 2026-10-28 (DEV-04) |
 | `frontend/src/api/auth.ts`, `health.ts`, `workspaces.ts`, `documents.ts` | One module per API area | ✅ | — |
 | `frontend/src/components/ErrorNotice.tsx` | Shows an error message and its request ID | ✅ | D-42 |
-| `frontend/src/features/auth/AuthCard.tsx`, `ServiceStatus.tsx` | Sign-in and account creation; API and database readiness | ✅ | I-28 |
+| `frontend/src/features/auth/AuthCard.tsx`, `ServiceStatus.tsx` | Sign-in and account creation; API and database readiness | ✅ | During a repeat readiness check, "Check again" stays on screen with `aria-disabled`, so it keeps focus; when the services become ready, focus moves to the status message (I-20). Switching forms hides the sign-out message (I-28) |
 | `frontend/src/features/workspaces/WorkspaceHome.tsx`, `WorkspaceRail.tsx`, `CreateWorkspaceForm.tsx` | Workspace list, selection, and creation | ✅ | — |
 | `frontend/src/features/documents/DocumentLibrary.tsx`, `DocumentRow.tsx`, `UploadQueue.tsx` | Uploads (file picker or drag and drop, one request per file), document list with status, download, and delete | ✅ | D-33 |
 | `frontend/src/features/documents/format.ts`, `saveBlob.ts` | File size, date, and type labels; saving a downloaded file through a temporary link | ✅ | The link's object URL is revoked after 60 s (D-44) |
-| `frontend/src/styles.css` | Styles (system fonts) | ✅ | Focus outline `#315c48` meets the WCAG contrast minimum (I-19). Extended for the Phase 2 screens on 2026-10-28 |
-| `frontend/src/App.test.tsx`, `frontend/src/api/client.test.ts`, and the `*.test.ts(x)` files in `src/features/` | 43 Vitest tests: `App` 5, `client` 10, `AuthCard` 5, `WorkspaceHome` 6, `DocumentLibrary` 10, `format` 6, `saveBlob` 1 | ✅ | Pass on Node 22 and Node 24 (V-83) |
+| `frontend/src/styles.css` | Styles (system fonts) | ✅ | Focus outline `#315c48` meets the WCAG contrast minimum (I-19). Extended for the Phase 2 screens on 2026-10-28. Link buttons with `aria-disabled="true"` look disabled (I-20) |
+| `frontend/src/App.test.tsx`, `frontend/src/api/client.test.ts`, and the `*.test.ts(x)` files in `src/features/` | 46 Vitest tests: `App` 5, `client` 10, `AuthCard` 6, `ServiceStatus` 2, `WorkspaceHome` 6, `DocumentLibrary` 10, `format` 6, `saveBlob` 1 | ✅ | Pass on Node 22 and Node 24 (V-98) |
 | `frontend/src/test/setup.ts` | Test setup: jest-dom matchers; cleanup, real timers, and restored mocks after each test | ✅ | — |
 | `frontend/src/test/api.ts` | Test helpers: a fake `fetch` keyed by method and path, sample responses, and `readBlobText` | ✅ | I-27 |
 | `backend/.venv/` | Local Python 3.14 virtual environment; also holds uv and pip-audit | Local only | Git-ignored; recreate with the first command in [section 8](#8-commands) |
@@ -158,7 +159,7 @@ Versions as checked on PyPI on 2026-10-28 (V-65); check again when adding them.
 | `POSTGRES_PORT` | `5432` | Compose host port for `db` | ✅ | Added on 2026-10-28 (I-08) |
 | `API_PORT` | `8000` | Compose host port; frontend API URL | ✅ | — |
 | `WEB_PORT` | `5173` | Compose host port; CORS origin | ✅ | — |
-| `DATABASE_URL` | `postgresql+psycopg://knowledge_assistant:local_dev_only@localhost:5432/knowledge_assistant` | Backend on the host; Alembic | ✅ | Compose builds its own URL with host `db` |
+| `DATABASE_URL` | `postgresql+psycopg://knowledge_assistant:local_dev_only@127.0.0.1:5432/knowledge_assistant` | Backend on the host; Alembic | ✅ | Compose builds its own URL with host `db`. Uses `127.0.0.1` rather than `localhost` since 2026-10-28, so readiness answers in about 3 s instead of 6 s while the database is down (I-25, V-97) |
 | `DATABASE_CONNECT_TIMEOUT_SECONDS` | `3` | Backend (host and Compose) | ✅ | Minimum 1; 0 is rejected because PostgreSQL would wait forever (D-28). Compose passes it to the container (I-23) |
 | `CORS_ORIGINS` | `["http://localhost:5173"]` | Backend | ✅ | JSON list of explicit `http://` or `https://` origins. Wildcards are rejected because the API accepts cookies from these origins (`test_config`) |
 | `APP_ENV` | `development` | Backend | ✅ | No effect yet (I-13) |
@@ -189,7 +190,7 @@ Versions as checked on PyPI on 2026-10-28 (V-65); check again when adding them.
 | Method | Path | Phase | Status | Remarks |
 |---|---|---|---|---|
 | GET | `/health/live` | P1 | ✅ Implemented | Returns `{"status":"ok"}` |
-| GET | `/health/ready` | P1 | ✅ Implemented | 200 `{"status":"ok","database":"ok"}` or 503 `{"status":"unavailable","database":"unavailable"}`. Without a reachable database, 503 arrives in about 6–7 s on this machine (V-32, D-28), or about 3 s when `DATABASE_URL` uses `127.0.0.1` instead of `localhost` (I-25, V-48) |
+| GET | `/health/ready` | P1 | ✅ Implemented | 200 `{"status":"ok","database":"ok"}` or 503 `{"status":"unavailable","database":"unavailable"}`. Without a reachable database, 503 arrives in about 3 s on this machine with the default `DATABASE_URL` (V-97); it took about 6 – 7 s while the default used `localhost` (V-32, V-48; I-25, fixed 2026-10-28) |
 | GET | `/docs`, `/openapi.json` | P1 | ✅ FastAPI default | Not separately tested; consider disabling outside development |
 | POST | `/api/v1/auth/register` | P2 | ✅ Implemented | Creates a local account and signs in: 201 with the user and the session cookie. 403 `registration_disabled` when sign-up is turned off; 409 `email_already_registered` (D-32, P2-14) |
 | POST | `/api/v1/auth/login` | P2 | ✅ Implemented | 200 with the user; sets the session cookie and replaces this browser's previous session. A wrong password and an unknown email get the same 401 `invalid_credentials` (D-32, P2-14) |

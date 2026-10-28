@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     app_name: str = "Evidence-backed Knowledge Assistant API"
     app_env: str = "development"
     database_url: str = (
-        "postgresql+psycopg://knowledge_assistant:local_dev_only@localhost:5432/knowledge_assistant"
+        "postgresql+psycopg://knowledge_assistant:local_dev_only@127.0.0.1:5432/knowledge_assistant"
     )
     # Bounds each connection attempt so readiness fails fast instead of hanging.
     database_connect_timeout_seconds: int = Field(default=3, ge=1)

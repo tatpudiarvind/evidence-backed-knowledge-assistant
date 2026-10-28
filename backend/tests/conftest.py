@@ -27,7 +27,7 @@ from app.main import create_app
 from tests.support import make_settings
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_TEST_DATABASE_URL = "postgresql+psycopg://knowledge_assistant:local_dev_only@localhost:5432/knowledge_assistant_test"
+DEFAULT_TEST_DATABASE_URL = "postgresql+psycopg://knowledge_assistant:local_dev_only@127.0.0.1:5432/knowledge_assistant_test"
 APP_TABLES = ("documents", "workspace_memberships", "workspaces", "user_sessions", "users")
 # The cheapest Argon2 parameters keep tests fast; the app itself uses the library defaults.
 CHEAP_PASSWORDS = PasswordHashing(PasswordHasher.from_parameters(profiles.CHEAPEST))

@@ -65,6 +65,7 @@ export default function AuthCard({ notice, onSignedIn }: AuthCardProps) {
   function switchMode() {
     setMode(isRegister ? "sign-in" : "register");
     setError(null);
+    setShowNotice(false);
     setPassword("");
   }
 

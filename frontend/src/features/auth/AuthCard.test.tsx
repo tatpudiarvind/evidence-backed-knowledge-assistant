@@ -32,7 +32,8 @@ describe("AuthCard", () => {
     });
     const onSignedIn = vi.fn();
 
-    render(<AuthCard notice={null} onSignedIn={onSignedIn} />);
+    render(<AuthCard notice="You've signed out." onSignedIn={onSignedIn} />);
+    expect(screen.getByText("You've signed out.")).toBeInTheDocument();
     fillCredentials();
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
@@ -40,6 +41,7 @@ describe("AuthCard", () => {
     expect(alert).toHaveTextContent("The email or password is incorrect.");
     expect(alert).toHaveTextContent("Reference req-7");
     expect(screen.getByRole("button", { name: "Sign in" })).toBeEnabled();
+    expect(screen.queryByText("You've signed out.")).not.toBeInTheDocument();
     expect(onSignedIn).not.toHaveBeenCalled();
   });
 
@@ -50,8 +52,7 @@ describe("AuthCard", () => {
     });
     const onSignedIn = vi.fn();
 
-    render(<AuthCard notice="You've signed out." onSignedIn={onSignedIn} />);
-    expect(screen.getByText("You've signed out.")).toBeInTheDocument();
+    render(<AuthCard notice={null} onSignedIn={onSignedIn} />);
     fireEvent.click(screen.getByRole("button", { name: "Create an account" }));
 
     expect(screen.getByRole("heading", { name: "Create your account" })).toBeInTheDocument();
@@ -68,7 +69,6 @@ describe("AuthCard", () => {
       email: USER.email,
       password: PASSWORD,
     });
-    expect(screen.queryByText("You've signed out.")).not.toBeInTheDocument();
   });
 
   it("lists field problems from the API", async () => {
@@ -107,6 +107,18 @@ describe("AuthCard", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Password")).toHaveValue("");
     expect(screen.getByLabelText("Email")).toHaveValue(USER.email);
+  });
+
+  it("hides the sign-out notice once the user switches forms", () => {
+    installFetch({ "GET /health/ready": READY_RESPONSE });
+
+    render(<AuthCard notice="You've signed out." onSignedIn={vi.fn()} />);
+    expect(screen.getByText("You've signed out.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Create an account" }));
+
+    expect(screen.queryByText("You've signed out.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    expect(screen.queryByText("You've signed out.")).not.toBeInTheDocument();
   });
 
   it("offers another readiness check when services are down", async () => {
