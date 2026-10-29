@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 from app.core.config import MAX_ANSWER_TOKENS, Settings
 from app.domain.grounding import ChatMessage
@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 # A reply is a few thousand characters; a response far larger than that isn't one.
 _MAX_RESPONSE_BYTES = 1024 * 1024
+# Describing the model is a quick lookup, never worth a long wait.
+_DESCRIBE_TIMEOUT_SECONDS = 10
 
 
 @dataclass(frozen=True)
@@ -45,7 +47,8 @@ class OllamaChatModel:
     """
 
     def __init__(self, settings: Settings) -> None:
-        self._url = f"{settings.ollama_base_url}/api/chat"
+        self._base_url = settings.ollama_base_url
+        self._url = f"{self._base_url}/api/chat"
         self._model = settings.ollama_model
         self._timeout = settings.llm_timeout_seconds
         self._context_tokens = settings.ollama_context_tokens
@@ -54,6 +57,32 @@ class OllamaChatModel:
     @property
     def name(self) -> str:
         return self._model
+
+    def describe(self) -> dict[str, str | None]:
+        """The server's version, and the model's digest, size, and quantization, as the server
+        reports them, to record which model produced a set of answers. None for anything the
+        server doesn't report, or if it doesn't respond."""
+        version = self._get_json("/api/version")
+        tags = self._get_json("/api/tags")
+        listed = tags.get("models") if isinstance(tags, dict) else None
+        # Ollama lists a model pulled without a tag under the tag "latest".
+        names = {self._model, self._model if ":" in self._model else f"{self._model}:latest"}
+        entry = next(
+            (
+                model
+                for model in (listed if isinstance(listed, list) else [])
+                if isinstance(model, dict) and model.get("name") in names
+            ),
+            {},
+        )
+        details = entry.get("details")
+        return {
+            "name": self._model,
+            "server_version": _text(version, "version"),
+            "digest": _text(entry, "digest"),
+            "parameter_size": _text(details, "parameter_size"),
+            "quantization_level": _text(details, "quantization_level"),
+        }
 
     def generate(self, messages: Sequence[ChatMessage]) -> Generation:
         body = {
@@ -101,6 +130,27 @@ class OllamaChatModel:
             raise LanguageModelUnavailableError(self._model)
         logger.info("Model %s replied in %.1f s", self._model, time.perf_counter() - started)
         return Generation(text, self._model)
+
+    def _get_json(self, path: str) -> Any:
+        """The JSON the server returns for a GET request, or None if it returns none."""
+        request = urllib.request.Request(f"{self._base_url}{path}", method="GET")
+        timeout = min(self._timeout, _DESCRIBE_TIMEOUT_SECONDS)
+        try:
+            with self._opener.open(request, timeout=timeout) as response:
+                raw = response.read(_MAX_RESPONSE_BYTES + 1)
+            if len(raw) > _MAX_RESPONSE_BYTES:
+                return None
+            return json.loads(raw)
+        except urllib.error.HTTPError as error:
+            error.close()
+            return None
+        except (OSError, http.client.HTTPException, ValueError):
+            return None
+
+
+def _text(value: Any, key: str) -> str | None:
+    found = value.get(key) if isinstance(value, dict) else None
+    return found if isinstance(found, str) else None
 
 
 def strip_thinking(content: str) -> str:

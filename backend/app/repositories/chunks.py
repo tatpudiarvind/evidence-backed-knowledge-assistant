@@ -63,6 +63,27 @@ def _ready_for_member(
     )
 
 
+def search_statement(
+    workspace_id: uuid.UUID, user_id: uuid.UUID, vector: Sequence[float], limit: int
+) -> Select[Any]:
+    """The query behind `search_workspace`. The evaluation also inspects its query plan."""
+    distance = DocumentChunk.embedding.cosine_distance(list(vector))
+    statement = _ready_for_member(
+        select(
+            DocumentChunk.id,
+            DocumentChunk.document_id,
+            Document.display_name,
+            DocumentChunk.text,
+            DocumentChunk.page_number,
+            DocumentChunk.section,
+            distance.label("distance"),
+        ),
+        workspace_id,
+        user_id,
+    )
+    return statement.order_by(distance).limit(limit)
+
+
 def search_workspace(
     session: Session,
     workspace_id: uuid.UUID,
@@ -78,21 +99,7 @@ def search_workspace(
     exist, up to pgvector's scan limit.
     """
     session.execute(text("SET LOCAL hnsw.iterative_scan = strict_order"))
-    distance = DocumentChunk.embedding.cosine_distance(list(vector))
-    statement = _ready_for_member(
-        select(
-            DocumentChunk.id,
-            DocumentChunk.document_id,
-            Document.display_name,
-            DocumentChunk.text,
-            DocumentChunk.page_number,
-            DocumentChunk.section,
-            distance.label("distance"),
-        ),
-        workspace_id,
-        user_id,
-    )
-    rows = session.execute(statement.order_by(distance).limit(limit))
+    rows = session.execute(search_statement(workspace_id, user_id, vector, limit))
     return [
         Passage(
             chunk_id=row.id,

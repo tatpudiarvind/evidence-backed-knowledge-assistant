@@ -9,7 +9,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from app.db.base import Base
-from tests.conftest import APP_TABLES, alembic_config, run_alembic
+from app.db.maintenance import APP_TABLES, alembic_config, run_alembic
 
 pytestmark = pytest.mark.integration
 

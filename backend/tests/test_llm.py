@@ -46,10 +46,20 @@ class OllamaStub:
         self.body = reply_body("Records are kept for seven years [S1].")
         self.hold = False
         self.requests: list[tuple[str, str, dict[str, Any]]] = []
+        # What GET requests return, by path; other paths get 404.
+        self.get_bodies: dict[str, bytes] = {}
         self._released = threading.Event()
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                body = stub.get_bodies.get(self.path)
+                self.send_response(200 if body is not None else 404)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body or b"")))
+                self.end_headers()
+                self.wfile.write(body or b"")
+
             def do_POST(self) -> None:
                 length = int(self.headers["Content-Length"])
                 body = json.loads(self.rfile.read(length))
@@ -85,10 +95,12 @@ def ollama() -> Iterator[OllamaStub]:
 
 
 def chat_model(url: str, **overrides: Any) -> OllamaChatModel:
-    settings = make_settings(
-        llm_provider="ollama", ollama_base_url=url, ollama_model=MODEL, **overrides
-    )
-    return OllamaChatModel(settings)
+    defaults: dict[str, Any] = {
+        "llm_provider": "ollama",
+        "ollama_base_url": url,
+        "ollama_model": MODEL,
+    }
+    return OllamaChatModel(make_settings(**(defaults | overrides)))
 
 
 def free_port() -> int:
@@ -233,6 +245,76 @@ def test_logs_never_include_the_prompt_or_the_reply(
 
     assert f"Model {MODEL} replied in" in caplog.text
     assert "secret" not in caplog.text
+
+
+def tags_body(*names: str) -> bytes:
+    return json.dumps(
+        {
+            "models": [
+                {
+                    "name": name,
+                    "digest": f"digest-of-{name}",
+                    "details": {"parameter_size": "4.0B", "quantization_level": "Q4_K_M"},
+                }
+                for name in names
+            ]
+        }
+    ).encode()
+
+
+def test_describe_reports_the_server_version_and_the_model(ollama: OllamaStub) -> None:
+    ollama.get_bodies = {
+        "/api/version": b'{"version": "0.0.0-synthetic"}',
+        "/api/tags": tags_body("other-model:latest", MODEL),
+    }
+
+    assert chat_model(ollama.url).describe() == {
+        "name": MODEL,
+        "server_version": "0.0.0-synthetic",
+        "digest": f"digest-of-{MODEL}",
+        "parameter_size": "4.0B",
+        "quantization_level": "Q4_K_M",
+    }
+    assert ollama.requests == []
+
+
+def test_describe_finds_a_model_named_without_a_tag(ollama: OllamaStub) -> None:
+    ollama.get_bodies = {"/api/tags": tags_body("synthetic-model:latest")}
+
+    described = chat_model(ollama.url, ollama_model="synthetic-model").describe()
+
+    assert described["digest"] == "digest-of-synthetic-model:latest"
+    assert described["server_version"] is None
+
+
+NOTHING_REPORTED = {
+    "name": MODEL,
+    "server_version": None,
+    "digest": None,
+    "parameter_size": None,
+    "quantization_level": None,
+}
+
+
+@pytest.mark.parametrize(
+    "tags",
+    [
+        tags_body("other-model:latest"),
+        b"Synthetic text that isn't JSON",
+        b'{"models": {}}',
+        b'{"models": [7, {"name": "synthetic-model:latest", "details": []}]}',
+    ],
+)
+def test_describe_leaves_out_what_the_server_does_not_report(
+    ollama: OllamaStub, tags: bytes
+) -> None:
+    ollama.get_bodies = {"/api/version": b'{"version": 7}', "/api/tags": tags}
+
+    assert chat_model(ollama.url).describe() == NOTHING_REPORTED
+
+
+def test_describe_works_without_a_server() -> None:
+    assert chat_model(f"http://127.0.0.1:{free_port()}").describe() == NOTHING_REPORTED
 
 
 def test_apps_use_ollama_only_when_configured(make_app: AppFactory) -> None:

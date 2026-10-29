@@ -17,71 +17,22 @@ import pytest
 from argon2 import PasswordHasher, profiles
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, make_url, text
+from sqlalchemy import make_url
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.pool import NullPool
 
 from alembic import command
-from alembic.config import Config
 from app.core.security import PasswordHashing
+from app.db.maintenance import create_database_if_missing, empty_tables, run_alembic
 from app.main import create_app
 from app.providers.embeddings import EmbeddingProvider
 from app.providers.llm import LanguageModel
 from tests.support import HashingEmbeddings, make_settings
 
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TEST_DATABASE_URL = "postgresql+psycopg://knowledge_assistant:local_dev_only@127.0.0.1:5432/knowledge_assistant_test"
-APP_TABLES = (
-    "citations",
-    "answers",
-    "questions",
-    "document_chunks",
-    "documents",
-    "workspace_memberships",
-    "workspaces",
-    "user_sessions",
-    "users",
-)
 # The cheapest Argon2 parameters keep tests fast; the app itself uses the library defaults.
 CHEAP_PASSWORDS = PasswordHashing(PasswordHasher.from_parameters(profiles.CHEAPEST))
 
 AppFactory = Callable[..., FastAPI]
-
-
-def alembic_config(connection: Any) -> Config:
-    config = Config()
-    config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
-    config.set_main_option("path_separator", "os")
-    config.attributes["connection"] = connection
-    return config
-
-
-def run_alembic(database_url: str, action: Callable[[Config], None]) -> None:
-    engine = create_engine(database_url, poolclass=NullPool)
-    try:
-        with engine.begin() as connection:
-            action(alembic_config(connection))
-    finally:
-        engine.dispose()
-
-
-def _create_database_if_missing(database_url: str, database_name: str) -> None:
-    server_engine = create_engine(
-        make_url(database_url).set(database="postgres"),
-        isolation_level="AUTOCOMMIT",
-        poolclass=NullPool,
-        connect_args={"connect_timeout": 3},
-    )
-    try:
-        with server_engine.connect() as connection:
-            exists = connection.scalar(
-                text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": database_name}
-            )
-            if not exists:
-                # The name was checked against a strict pattern, so quoting it is enough.
-                connection.execute(text(f'CREATE DATABASE "{database_name}"'))
-    finally:
-        server_engine.dispose()
 
 
 @pytest.fixture(scope="session")
@@ -94,7 +45,7 @@ def test_database_url() -> str:
             "integration tests delete all of its data."
         )
     try:
-        _create_database_if_missing(database_url, database_name)
+        create_database_if_missing(database_url)
         run_alembic(database_url, lambda config: command.upgrade(config, "head"))
     except OperationalError as error:
         if os.environ.get("TEST_DATABASE_REQUIRED") == "1":
@@ -106,12 +57,7 @@ def test_database_url() -> str:
 @pytest.fixture
 def database_url(test_database_url: str) -> str:
     """The test database, emptied before each test."""
-    engine = create_engine(test_database_url, poolclass=NullPool)
-    try:
-        with engine.begin() as connection:
-            connection.execute(text(f"TRUNCATE {', '.join(APP_TABLES)} CASCADE"))
-    finally:
-        engine.dispose()
+    empty_tables(test_database_url)
     return test_database_url
 
 
