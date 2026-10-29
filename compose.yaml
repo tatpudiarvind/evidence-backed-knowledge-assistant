@@ -41,6 +41,17 @@ services:
       MAX_DOCUMENT_CHARACTERS: ${MAX_DOCUMENT_CHARACTERS:-2000000}
       PARSE_TIMEOUT_SECONDS: ${PARSE_TIMEOUT_SECONDS:-120}
       EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
+      # Ollama on the host usually listens on 127.0.0.1 only, out of this container's reach,
+      # so answers list matching passages unless both COMPOSE_ settings name a reachable server.
+      LLM_PROVIDER: ${COMPOSE_LLM_PROVIDER:-none}
+      OLLAMA_BASE_URL: ${COMPOSE_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b-instruct-2507-q4_K_M}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+      OLLAMA_CONTEXT_TOKENS: ${OLLAMA_CONTEXT_TOKENS:-4096}
+      ANSWER_CONTEXT_CHARACTERS: ${ANSWER_CONTEXT_CHARACTERS:-6000}
+      RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-5}
+      RETRIEVAL_MIN_SIMILARITY: ${RETRIEVAL_MIN_SIMILARITY:-0.5}
+      QUESTION_CLEANUP_ENABLED: ${QUESTION_CLEANUP_ENABLED:-true}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:

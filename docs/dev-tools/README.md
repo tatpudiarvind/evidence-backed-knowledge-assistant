@@ -30,7 +30,7 @@ Don't run this server and the project's Docker Compose stack at the same time: b
 
 ### Try the local AI model
 
-The app starts using it in Phase 4 of the project.
+Since Phase 4 of the project, the API asks this model to write the answers to questions about uploaded documents. While Ollama isn't running, the API lists the closest passages instead.
 
 1. Start Ollama: `D:\DevTools\ollama-start.cmd`
 2. Open `D:\DevTools\dev-shell.cmd` and ask the model something:

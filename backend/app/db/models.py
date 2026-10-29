@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 from app.domain.documents import DocumentStatus
 from app.domain.indexing import EMBEDDING_DIMENSION, MAX_SECTION_LENGTH
+from app.domain.questions import AbstentionReason, AnswerMode
 from app.domain.workspaces import WorkspaceRole
 
 
@@ -135,3 +136,83 @@ class DocumentChunk(Base):
     # Read back as a NumPy array.
     embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIMENSION))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Question(Base):
+    """A question a member asked in a workspace (Phase 4).
+
+    Deleted with its answer and citations three days after it was asked, or as soon as a
+    document it cites is deleted.
+    """
+
+    __tablename__ = "questions"
+    __table_args__ = (
+        # Serves a member's question history in a workspace, newest first.
+        Index(
+            "ix_questions_workspace_id_user_id_created_at", "workspace_id", "user_id", "created_at"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    text: Mapped[str] = mapped_column(Text)
+    # Its index serves deleting the questions older than the retention period.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
+class Answer(Base):
+    """How a question was answered: a model's cited text, the matching passages, or neither."""
+
+    __tablename__ = "answers"
+    __table_args__ = (
+        CheckConstraint(_allowed_values("mode", [mode.value for mode in AnswerMode]), "mode"),
+        CheckConstraint(
+            _allowed_values("abstention_reason", [reason.value for reason in AbstentionReason]),
+            "abstention_reason",
+        ),
+        # Only a generated answer that doesn't abstain has text.
+        CheckConstraint(
+            "(text IS NOT NULL) = (mode = 'generated' AND abstention_reason IS NULL)",
+            "text_matches_outcome",
+        ),
+        # A generated answer records the model that wrote it.
+        CheckConstraint("mode = 'search_only' OR model_name IS NOT NULL", "generated_has_model"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    question_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("questions.id", ondelete="CASCADE"), unique=True
+    )
+    mode: Mapped[str] = mapped_column(String(20))
+    text: Mapped[str | None] = mapped_column(Text)
+    abstention_reason: Mapped[str | None] = mapped_column(String(30))
+    # The model that was asked, if one was; a search-only answer names it if it didn't reply.
+    model_name: Mapped[str | None] = mapped_column(String(200))
+
+
+class Citation(Base):
+    """A passage an answer rests on; `number` is its [n] marker in the answer's text."""
+
+    __tablename__ = "citations"
+    __table_args__ = (
+        UniqueConstraint("answer_id", "number"),
+        CheckConstraint("number >= 1", "number_positive"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    answer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("answers.id", ondelete="CASCADE"))
+    number: Mapped[int]
+    # Also reachable through the chunk; kept to find the questions that cite a document.
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    chunk_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("document_chunks.id", ondelete="CASCADE"), index=True
+    )
+    # Cosine similarity between the question and the passage when the question was asked.
+    similarity: Mapped[float]

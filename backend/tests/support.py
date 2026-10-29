@@ -5,7 +5,7 @@ import io
 import math
 import re
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,7 +17,9 @@ from httpx2 import Response
 from pypdf import PdfReader, PdfWriter
 
 from app.core.config import Settings
+from app.domain.grounding import ChatMessage
 from app.domain.indexing import EMBEDDING_DIMENSION
+from app.providers.llm import Generation, LanguageModelUnavailableError
 from app.services.ingestion import DocumentIndexer
 
 CSRF_HEADERS = {"X-CSRF-Protection": "1"}
@@ -35,6 +37,10 @@ def make_settings(**overrides: Any) -> Settings:
         "database_connect_timeout_seconds": 1,
         # Uploads stay queued; tests that need indexing call index_queued_documents.
         "ingestion_worker_enabled": False,
+        # Tests give an app a language model when they need one.
+        "llm_provider": "none",
+        # Tests that need expired questions deleted call the cleanup themselves.
+        "question_cleanup_enabled": False,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -210,3 +216,32 @@ def index_queued_documents(app: FastAPI) -> int:
     while indexer.process_next():
         count += 1
     return count
+
+
+class ScriptedLanguageModel:
+    """A stand-in language model that gives set replies in turn, and records each prompt.
+
+    With no replies left, or with `fail=True`, it acts like a model that doesn't respond. A
+    `before` step runs first, as if it happened while the model was writing.
+    """
+
+    def __init__(self, *replies: str, name: str = "scripted-model", fail: bool = False) -> None:
+        self.name = name
+        self.prompts: list[list[ChatMessage]] = []
+        self.before: Callable[[], None] | None = None
+        self._replies = list(replies)
+        self._fail = fail
+
+    def generate(self, messages: Sequence[ChatMessage]) -> Generation:
+        self.prompts.append(list(messages))
+        if self.before is not None:
+            self.before()
+        if self._fail or not self._replies:
+            raise LanguageModelUnavailableError(self.name)
+        return Generation(self._replies.pop(0), self.name)
+
+
+def ask(client: TestClient, workspace_id: str, text: str) -> Response:
+    return client.post(
+        f"/api/v1/workspaces/{workspace_id}/questions", json={"text": text}, headers=CSRF_HEADERS
+    )

@@ -1,7 +1,7 @@
 """Phase 2's definition of done (P2-05, P2-12): one user can never reach another's documents.
 
-Phase 3's retry endpoint (P3-08) is held to the same rule. Every denial looks the same as
-"not found", so IDs can't be probed for existence.
+Phase 3's retry endpoint (P3-08) and Phase 4's question endpoints (P4-09) are held to the same
+rule. Every denial looks the same as "not found", so IDs can't be probed for existence.
 """
 
 import uuid
@@ -14,8 +14,10 @@ from fastapi.testclient import TestClient
 from app.db.models import Document
 from tests.support import (
     CSRF_HEADERS,
+    ask,
     create_workspace,
     error_code,
+    index_queued_documents,
     register,
     stored_files,
     upload,
@@ -24,6 +26,7 @@ from tests.support import (
 pytestmark = pytest.mark.integration
 
 PRIVATE_TEXT = b"Synthetic text that only its owner may read."
+PRIVATE_QUESTION = "Who may read the synthetic text?"
 
 
 @dataclass
@@ -116,12 +119,36 @@ def test_cannot_retry_another_users_document(db_app, users: TwoUsers) -> None:
     assert (owner_view["status"], owner_view["failure_code"]) == ("failed", "no_text_found")
 
 
+def test_cannot_ask_about_another_users_workspace(db_app, users: TwoUsers) -> None:
+    assert index_queued_documents(db_app) == 1
+
+    response = ask(users.intruder, users.workspace_id, PRIVATE_QUESTION)
+
+    assert response.status_code == 404
+    assert error_code(response) == "workspace_not_found"
+    assert "only its owner" not in response.text
+    history = users.owner.get(f"/api/v1/workspaces/{users.workspace_id}/questions")
+    assert history.json() == {"items": []}
+
+
+def test_cannot_list_another_users_questions(users: TwoUsers) -> None:
+    assert ask(users.owner, users.workspace_id, PRIVATE_QUESTION).status_code == 201
+
+    response = users.intruder.get(f"/api/v1/workspaces/{users.workspace_id}/questions")
+
+    assert response.status_code == 404
+    assert error_code(response) == "workspace_not_found"
+    assert PRIVATE_QUESTION not in response.text
+
+
 @pytest.mark.parametrize(
     ("method", "path"),
     [
         ("GET", "/api/v1/auth/me"),
         ("GET", "/api/v1/workspaces"),
         ("GET", "/api/v1/workspaces/{workspace_id}/documents"),
+        ("GET", "/api/v1/workspaces/{workspace_id}/questions"),
+        ("POST", "/api/v1/workspaces/{workspace_id}/questions"),
         ("GET", "/api/v1/documents/{document_id}"),
         ("GET", "/api/v1/documents/{document_id}/file"),
         ("POST", "/api/v1/documents/{document_id}/retry"),

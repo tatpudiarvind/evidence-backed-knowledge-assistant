@@ -18,6 +18,7 @@ import {
 } from "../../api/documents";
 import type { Workspace } from "../../api/workspaces";
 import ErrorNotice from "../../components/ErrorNotice";
+import QuestionPanel from "../questions/QuestionPanel";
 import DocumentRow from "./DocumentRow";
 import UploadQueue, { type UploadItem, isUploadActive } from "./UploadQueue";
 
@@ -77,6 +78,9 @@ export default function DocumentLibrary({
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [dragging, setDragging] = useState(false);
   const [announcement, setAnnouncement] = useState("");
+  const [deletedDocumentIds, setDeletedDocumentIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const id = useId();
   const headingRef = useRef<HTMLHeadingElement>(null);
   const listHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -119,6 +123,7 @@ export default function DocumentLibrary({
 
   const loadedDocuments = load.state === "loaded" ? load.documents : null;
   const indexing = loadedDocuments?.some((item) => isIndexing(item.status)) ?? false;
+  const readyCount = loadedDocuments?.filter((item) => item.status === "ready").length ?? null;
 
   useEffect(() => {
     documentsRef.current = loadedDocuments ?? [];
@@ -274,6 +279,7 @@ export default function DocumentLibrary({
         ? { state: "loaded", documents: current.documents.filter((item) => item.id !== record.id) }
         : current,
     );
+    setDeletedDocumentIds((current) => new Set(current).add(record.id));
     setAnnouncement(`Deleted ${record.displayName}.`);
     listHeadingRef.current?.focus();
   }, []);
@@ -308,6 +314,13 @@ export default function DocumentLibrary({
           {load.state === "loaded" ? documentCount(load.documents.length) : "\u00a0"}
         </p>
       </header>
+
+      <QuestionPanel
+        workspace={workspace}
+        readyCount={readyCount}
+        deletedDocumentIds={deletedDocumentIds}
+        onSessionExpired={onSessionExpired}
+      />
 
       <section className="library-section" aria-labelledby={`${id}-add`}>
         <h2 id={`${id}-add`}>Add documents</h2>

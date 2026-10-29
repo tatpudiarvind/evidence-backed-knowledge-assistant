@@ -1,5 +1,5 @@
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 
 from sqlalchemy import Select, delete, func, select, update
 from sqlalchemy.orm import Session
@@ -58,6 +58,17 @@ def get_by_id(session: Session, document_id: uuid.UUID, *, lock: bool = False) -
     if lock:
         statement = statement.with_for_update()
     return session.scalar(statement)
+
+
+def lock_ready(session: Session, document_ids: Collection[uuid.UUID]) -> set[uuid.UUID]:
+    """Which of these documents are ready, with a shared lock that keeps them from being
+    deleted until the transaction ends."""
+    statement = (
+        select(Document.id)
+        .where(Document.id.in_(document_ids), Document.status == DocumentStatus.READY.value)
+        .with_for_update(read=True)
+    )
+    return set(session.scalars(statement).all())
 
 
 def claim_next_queued(session: Session) -> Document | None:

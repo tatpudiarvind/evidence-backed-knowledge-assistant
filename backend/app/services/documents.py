@@ -19,6 +19,7 @@ from app.domain.documents import (
 )
 from app.providers.storage import DocumentStorage, new_storage_key
 from app.repositories import documents as document_repository
+from app.repositories import questions as question_repository
 from app.services.workspaces import require_workspace
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,8 @@ def delete_document(
         raise _document_not_found()
     # Marked first, so a failure part-way leaves a visible "deleting" document to retry.
     document.status = DocumentStatus.DELETING.value
+    # Answers that cite the document go in the same step, so none outlives it.
+    question_repository.delete_citing_document(session, document.id)
     session.commit()
     try:
         storage.delete(document.storage_key)

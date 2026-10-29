@@ -42,6 +42,22 @@ export function readNumber(source: JsonObject, key: string): number {
   return value;
 }
 
+export function readOptionalNumber(source: JsonObject, key: string): number | null {
+  const value = source[key];
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return readNumber(source, key);
+}
+
+export function readBoolean(source: JsonObject, key: string): boolean {
+  const value = source[key];
+  if (typeof value !== "boolean") {
+    throw new ResponseShapeError(`Expected "${key}" to be true or false.`);
+  }
+  return value;
+}
+
 export function readArray(source: JsonObject, key: string): unknown[] {
   const value = source[key];
   if (!Array.isArray(value)) {
@@ -61,4 +77,16 @@ export function readEnum<T extends string>(
     throw new ResponseShapeError(`Unexpected "${key}" value.`);
   }
   return match;
+}
+
+export function readOptionalEnum<T extends string>(
+  source: JsonObject,
+  key: string,
+  allowed: readonly T[],
+): T | null {
+  const value = source[key];
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return readEnum(source, key, allowed);
 }

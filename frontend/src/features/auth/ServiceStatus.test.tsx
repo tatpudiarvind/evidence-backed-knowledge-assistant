@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { READY_RESPONSE, callsTo, installFetch, jsonResponse } from "../../test/api";
@@ -60,6 +60,7 @@ describe("ServiceStatus", () => {
 
     expect(await screen.findByText("API and database are ready")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Check again" })).not.toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveFocus();
+    // Focus moves in an effect, which can run just after the text changes.
+    await waitFor(() => expect(screen.getByRole("status")).toHaveFocus());
   });
 });

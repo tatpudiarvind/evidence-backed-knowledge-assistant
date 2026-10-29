@@ -26,11 +26,15 @@ from alembic.config import Config
 from app.core.security import PasswordHashing
 from app.main import create_app
 from app.providers.embeddings import EmbeddingProvider
+from app.providers.llm import LanguageModel
 from tests.support import HashingEmbeddings, make_settings
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TEST_DATABASE_URL = "postgresql+psycopg://knowledge_assistant:local_dev_only@127.0.0.1:5432/knowledge_assistant_test"
 APP_TABLES = (
+    "citations",
+    "answers",
+    "questions",
     "document_chunks",
     "documents",
     "workspace_memberships",
@@ -120,17 +124,24 @@ def storage_dir(tmp_path: Path) -> Path:
 def make_app(storage_dir: Path) -> Iterator[AppFactory]:
     """Builds apps that don't touch a database unless given one.
 
-    They embed text with `HashingEmbeddings` unless given another provider, and their
-    background worker stays off unless `ingestion_worker_enabled=True`.
+    They embed text with `HashingEmbeddings` unless given another provider, have no language
+    model unless given one, and their background threads stay off unless their settings turn
+    them on.
     """
     apps: list[FastAPI] = []
 
-    def factory(*, embeddings: EmbeddingProvider | None = None, **overrides: Any) -> FastAPI:
+    def factory(
+        *,
+        embeddings: EmbeddingProvider | None = None,
+        language_model: LanguageModel | None = None,
+        **overrides: Any,
+    ) -> FastAPI:
         overrides.setdefault("storage_dir", storage_dir)
         app = create_app(
             make_settings(**overrides),
             passwords=CHEAP_PASSWORDS,
             embeddings=embeddings or HashingEmbeddings(),
+            language_model=language_model,
         )
         apps.append(app)
         return app
@@ -138,6 +149,7 @@ def make_app(storage_dir: Path) -> Iterator[AppFactory]:
     yield factory
     for app in apps:
         app.state.ingestion_worker.stop()
+        app.state.question_cleanup.stop()
         app.state.engine.dispose()
 
 

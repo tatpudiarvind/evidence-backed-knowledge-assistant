@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.api.deps import require_csrf_header
-from app.api.v1 import auth, documents, workspaces
+from app.api.v1 import auth, documents, questions, workspaces
 from app.api.v1.schemas import ErrorResponse
 
 router = APIRouter(
@@ -15,3 +15,4 @@ router = APIRouter(
 router.include_router(auth.router)
 router.include_router(workspaces.router)
 router.include_router(documents.router)
+router.include_router(questions.router)

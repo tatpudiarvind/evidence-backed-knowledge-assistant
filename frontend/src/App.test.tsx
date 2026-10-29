@@ -40,6 +40,7 @@ describe("App", () => {
       "POST /api/v1/auth/login": jsonResponse(USER),
       "GET /api/v1/workspaces": jsonResponse({ items: [workspaceJson()] }),
       "GET /api/v1/workspaces/ws-1/documents": jsonResponse({ items: [] }),
+      "GET /api/v1/workspaces/ws-1/questions": jsonResponse({ items: [] }),
     });
 
     render(<App />);

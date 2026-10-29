@@ -6,13 +6,14 @@ It is a retrieval and summarization demo, not professional, medical, legal, or f
 
 ## Status
 
-Work in progress. As of 2026-10-29, Phases 0 to 3 of the [roadmap](docs/specification/README.md#10-implementation-roadmap-and-definition-of-done) are done:
+Work in progress. As of 2026-10-29, Phases 0 to 4 of the [roadmap](docs/specification/README.md#10-implementation-roadmap-and-definition-of-done) are done:
 
 - **Foundation:** a FastAPI backend, a React and TypeScript web app built with Vite, PostgreSQL with pgvector, Alembic migrations, health endpoints, Docker Compose, and GitHub Actions CI.
 - **Accounts and documents:** local accounts, and workspaces that other users can't access; upload, list, download, and delete for PDF, Word (.docx), and plain-text files.
 - **Indexing:** each uploaded document is split into chunks that keep their page or section, embedded on the CPU by a local model, and stored in pgvector. The web app shows each document's status as it changes, and a document that can't be indexed shows what to do and can be retried.
+- **Questions and answers:** questions about a workspace's documents are matched to their closest passages. A local model, run by Ollama, writes an answer that cites the document and page or section of each passage it uses; without the model, the closest passages are the answer. When the documents don't cover a question, the app says so instead of guessing. Questions and answers are kept for 3 days.
 
-Next is Phase 4: questions, answers with citations, and abstaining when the evidence is weak. Nothing searches the documents or answers questions yet. Evaluation is Phase 5, so there are no quality measurements yet. Progress is recorded in the [project tracker](docs/tracker/README.md).
+Next is Phase 5: evaluation and hardening. Answer quality hasn't been measured yet, so there are no quality measurements; Phase 5 measures retrieval and citations on a small reviewed set of questions. Progress is recorded in the [project tracker](docs/tracker/README.md).
 
 ## Documentation
 
@@ -42,6 +43,8 @@ uv run python -m app.cli download-embedding-model
 ```
 
 Documents that failed because the model was missing can then be retried in the web app.
+
+Answers written by a model are optional. Without containers, the API uses [Ollama](https://ollama.com/download) on your machine when it's running and its model is pulled (`ollama pull qwen3:4b-instruct-2507-q4_K_M`, about 2.5 GB); otherwise, and by default under Docker Compose, answers list the closest passages. The quickstart explains the settings.
 
 ## License
 

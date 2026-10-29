@@ -1,6 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -10,6 +10,12 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 # image this resolves to `/`, where no `.env` exists, so Compose's environment applies instead.
 REPOSITORY_ROOT = BACKEND_ROOT.parent
 MEBIBYTE = 1024 * 1024
+# The longest answer a language model may write, in tokens.
+MAX_ANSWER_TOKENS = 768
+# Room kept in the model's context for its rules, the question, and the answer, in tokens.
+_PROMPT_RESERVED_TOKENS = MAX_ANSWER_TOKENS + 1024
+# A cautious estimate for passage text; English averages about 4 characters per token.
+_CHARACTERS_PER_TOKEN = 3
 
 
 class Settings(BaseSettings):
@@ -55,6 +61,26 @@ class Settings(BaseSettings):
     # The model card's instruction for short search queries; documents get no prefix.
     embedding_query_prefix: str = "Represent this sentence for searching relevant passages: "
 
+    # Answers (Phase 4). With "ollama", a local Ollama server writes answers from the passages
+    # found for each question. With "none", or while that server doesn't reply, answers list
+    # the passages instead.
+    llm_provider: Literal["ollama", "none"] = "ollama"
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen3:4b-instruct-2507-q4_K_M"
+    # A local model on an ordinary computer can take a minute or more to answer.
+    llm_timeout_seconds: int = Field(default=120, ge=1, le=600)
+    # The model's context window, in tokens; the rules, passages, question, and answer share it.
+    ollama_context_tokens: int = Field(default=4096, ge=1024, le=131_072)
+    # How many of the passages closest to a question are considered.
+    retrieval_top_k: int = Field(default=5, ge=1, le=20)
+    # Passages less similar to the question than this don't count as evidence. Provisional:
+    # it hasn't yet been measured against reviewed questions.
+    retrieval_min_similarity: float = Field(default=0.5, ge=0.0, le=1.0)
+    # The most passage text the model is shown for one question, in characters.
+    answer_context_characters: int = Field(default=6000, ge=1000, le=50_000)
+    # A background thread in the API process deletes questions three days after they're asked.
+    question_cleanup_enabled: bool = True
+
     model_config = SettingsConfigDict(
         env_file=REPOSITORY_ROOT / ".env",
         env_file_encoding="utf-8",
@@ -70,12 +96,30 @@ class Settings(BaseSettings):
                 raise ValueError("CORS origins must be explicit http:// or https:// origins")
         return origins
 
+    @field_validator("ollama_base_url")
+    @classmethod
+    def _check_ollama_url(cls, url: str) -> str:
+        if not url.startswith(("http://", "https://")):
+            raise ValueError("OLLAMA_BASE_URL must be an http:// or https:// URL")
+        return url.rstrip("/")
+
     @model_validator(mode="after")
     def _check_chunk_overlap(self) -> Self:
         # Each chunk must start well after the previous one, or indexing would barely advance.
         if self.chunk_overlap_characters * 4 > self.chunk_size_characters:
             raise ValueError(
                 "CHUNK_OVERLAP_CHARACTERS must be at most a quarter of CHUNK_SIZE_CHARACTERS"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_answer_context(self) -> Self:
+        # A prompt longer than the context window gets cut, which could drop the model's rules.
+        needed = self.answer_context_characters // _CHARACTERS_PER_TOKEN + _PROMPT_RESERVED_TOKENS
+        if self.llm_provider == "ollama" and needed > self.ollama_context_tokens:
+            raise ValueError(
+                "ANSWER_CONTEXT_CHARACTERS is too large for OLLAMA_CONTEXT_TOKENS: lower the "
+                "first or raise the second"
             )
         return self
 

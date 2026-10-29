@@ -6,6 +6,12 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domain.documents import DocumentStatus
+from app.domain.questions import (
+    MAX_QUESTION_LENGTH,
+    AbstentionReason,
+    AnswerMode,
+    clean_question,
+)
 from app.domain.workspaces import WorkspaceRole
 
 MIN_PASSWORD_LENGTH = 12
@@ -87,6 +93,62 @@ class DocumentOut(BaseModel):
 
 class DocumentList(BaseModel):
     items: list[DocumentOut]
+
+
+class QuestionCreateRequest(BaseModel):
+    # Generous, so the length that counts is checked after cleaning.
+    text: str = Field(max_length=4 * MAX_QUESTION_LENGTH)
+
+    @field_validator("text")
+    @classmethod
+    def _clean_text(cls, value: str) -> str:
+        text = clean_question(value)
+        if not 1 <= len(text) <= MAX_QUESTION_LENGTH:
+            raise ValueError(f"Questions must be 1 to {MAX_QUESTION_LENGTH} characters long.")
+        return text
+
+
+class CitationOut(BaseModel):
+    # The [n] marker in a generated answer's text.
+    number: int
+    document_id: uuid.UUID
+    document_name: str
+    chunk_id: uuid.UUID
+    # PDF pages, from 1; Word and text files have none.
+    page_number: int | None
+    # The Word heading the passage falls under, if any.
+    section: str | None
+    # The passage's text.
+    excerpt: str
+    # Cosine similarity to the question, from -1 to 1; higher is closer.
+    similarity: float
+
+
+class AnswerOut(BaseModel):
+    # "generated": a language model wrote the answer, or declined to. "search_only": the
+    # citations are the passages that best match the question.
+    mode: AnswerMode
+    # Only a generated answer that doesn't abstain has text.
+    text: str | None
+    abstained: bool
+    abstention_reason: AbstentionReason | None
+    # The model that was asked, if one was; a search-only answer names it if it didn't reply.
+    model_name: str | None
+    citations: list[CitationOut]
+
+
+class QuestionOut(BaseModel):
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    text: str
+    created_at: datetime
+    # When the question and its answer are deleted.
+    expires_at: datetime
+    answer: AnswerOut
+
+
+class QuestionList(BaseModel):
+    items: list[QuestionOut]
 
 
 class ErrorField(BaseModel):

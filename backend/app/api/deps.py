@@ -1,4 +1,4 @@
-"""Request dependencies: settings, database session, storage, indexing, and the signed-in user."""
+"""Request dependencies: settings, database session, storage, models, and the signed-in user."""
 
 from collections.abc import Iterator
 from typing import Annotated
@@ -11,6 +11,8 @@ from app.core.config import Settings
 from app.core.errors import AppError
 from app.core.security import PasswordHashing
 from app.db.models import User
+from app.providers.embeddings import EmbeddingProvider
+from app.providers.llm import LanguageModel
 from app.providers.storage import DocumentStorage
 from app.services import auth as auth_service
 from app.workers.ingestion import IngestionWorker
@@ -48,6 +50,17 @@ async def get_ingestion_worker(request: Request) -> IngestionWorker:
     return worker
 
 
+async def get_embeddings(request: Request) -> EmbeddingProvider:
+    embeddings: EmbeddingProvider = request.app.state.embeddings
+    return embeddings
+
+
+async def get_language_model(request: Request) -> LanguageModel | None:
+    """The model that writes answers, or None when answers list matching passages instead."""
+    language_model: LanguageModel | None = request.app.state.language_model
+    return language_model
+
+
 def get_db(request: Request) -> Iterator[Session]:
     session_factory: sessionmaker[Session] = request.app.state.session_factory
     with session_factory() as session:
@@ -58,6 +71,8 @@ SettingsDep = Annotated[Settings, Depends(get_app_settings)]
 StorageDep = Annotated[DocumentStorage, Depends(get_storage)]
 PasswordsDep = Annotated[PasswordHashing, Depends(get_passwords)]
 IngestionWorkerDep = Annotated[IngestionWorker, Depends(get_ingestion_worker)]
+EmbeddingsDep = Annotated[EmbeddingProvider, Depends(get_embeddings)]
+LanguageModelDep = Annotated[LanguageModel | None, Depends(get_language_model)]
 DbSession = Annotated[Session, Depends(get_db)]
 SessionToken = Annotated[str | None, Depends(session_cookie)]
 

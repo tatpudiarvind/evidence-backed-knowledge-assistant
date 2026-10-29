@@ -22,6 +22,7 @@ describe("WorkspaceHome", () => {
         201,
       ),
       "GET /api/v1/workspaces/ws-new/documents": jsonResponse({ items: [] }),
+      "GET /api/v1/workspaces/ws-new/questions": jsonResponse({ items: [] }),
     });
 
     render(<WorkspaceHome onSessionExpired={vi.fn()} />);
@@ -68,6 +69,7 @@ describe("WorkspaceHome", () => {
         items: [workspaceJson(), workspaceJson({ id: "ws-2", name: "Policies" })],
       }),
       "GET /api/v1/workspaces/ws-1/documents": jsonResponse({ items: [documentJson()] }),
+      "GET /api/v1/workspaces/ws-1/questions": jsonResponse({ items: [] }),
       "GET /api/v1/workspaces/ws-2/documents": jsonResponse({
         items: [
           documentJson({
@@ -78,6 +80,7 @@ describe("WorkspaceHome", () => {
           }),
         ],
       }),
+      "GET /api/v1/workspaces/ws-2/questions": jsonResponse({ items: [] }),
     });
 
     render(<WorkspaceHome onSessionExpired={vi.fn()} />);
@@ -105,8 +108,10 @@ describe("WorkspaceHome", () => {
     installFetch({
       "GET /api/v1/workspaces": jsonResponse({ items: [workspaceJson()] }),
       "GET /api/v1/workspaces/ws-1/documents": jsonResponse({ items: [] }),
+      "GET /api/v1/workspaces/ws-1/questions": jsonResponse({ items: [] }),
       "POST /api/v1/workspaces": jsonResponse(workspaceJson({ id: "ws-2", name: "Policies" }), 201),
       "GET /api/v1/workspaces/ws-2/documents": jsonResponse({ items: [] }),
+      "GET /api/v1/workspaces/ws-2/questions": jsonResponse({ items: [] }),
     });
 
     render(<WorkspaceHome onSessionExpired={vi.fn()} />);

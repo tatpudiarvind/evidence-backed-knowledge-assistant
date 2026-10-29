@@ -55,10 +55,10 @@ The portfolio goal is to turn the existing enterprise knowledge-assistant experi
 | ORM/migrations | SQLAlchemy 2 + Alembic | Explicit schema models and repeatable migrations. |
 | Document parsing | pypdf for PDF (pypdfium2 as fallback), python-docx for DOCX, UTF-8 decoding for TXT | Permissive licenses (BSD-3-Clause, MIT) that suit the MIT-licensed repository; PyMuPDF is AGPL-3.0 or commercial. Keep parsing isolated behind an interface; preserve page/section metadata where possible. No OCR in the MVP: a scanned PDF without a text layer fails with a clear message. |
 | Embeddings | Sentence Transformers with `BAAI/bge-small-en-v1.5` (384 dimensions, MIT) on CPU, pinned to one revision: downloaded once with `python -m app.cli download-embedding-model`, then loaded without a network. `all-MiniLM-L6-v2` (384 dimensions, Apache-2.0) is the fallback | Local, repeatable, no per-call API bill. The model and its revision are pinned in the backend settings and left out of `.env.example` on purpose: vectors from different models don't match, and the vector column holds exactly 384 values, so another model means indexing every document again, plus a new migration if its vector size differs. Tests use a deterministic fake embedder, apart from one test with the real model. |
-| LLM | Provider interface; local Ollama adapter first (default model Qwen3-4B-Instruct-2507, Apache-2.0, pinned as the Ollama tag `qwen3:4b-instruct-2507-q4_K_M`); search-only mode (cited passages, no generated text) when no model is available; optional hosted adapter later | Local development avoids mandatory paid API; hosted provider is opt-in and clearly disclosed. |
-| Retrieval | pgvector cosine similarity; add keyword/hybrid search only after baseline evaluation | Simple measurable first implementation; avoid premature complexity. |
+| LLM | Provider interface; local Ollama adapter (default model Qwen3-4B-Instruct-2507, Apache-2.0, pinned as the Ollama tag `qwen3:4b-instruct-2507-q4_K_M`), called only by the backend, through Ollama's chat API at temperature 0 and with no tools offered; search-only mode (cited passages, no generated text) when no model is configured (`LLM_PROVIDER=none`) or the model doesn't reply; optional hosted adapter later | Local development avoids mandatory paid API; hosted provider is opt-in and clearly disclosed. Without a model, questions still return the passages that match. |
+| Retrieval | pgvector cosine similarity through the HNSW index, limited to the ready documents of the workspace asked about, and only for its members: the 5 closest passages (`RETRIEVAL_TOP_K`), of which those with a similarity of at least 0.5 (`RETRIEVAL_MIN_SIMILARITY`) count as evidence; add keyword/hybrid search only after baseline evaluation | Simple measurable first implementation; avoid premature complexity. Both numbers are provisional until the Phase 5 evaluation measures them. |
 | Ingestion | A background worker thread in the API process takes the oldest queued document from PostgreSQL (`FOR UPDATE SKIP LOCKED`); uploads and retries wake it, and it also checks every 5 seconds | Keeps slow parsing out of the HTTP request path without a separate service or queue. Run a single API process, because each process would start its own worker; documents left `processing` when the server stopped are queued again at the next start. If reliability requires a durable queue, add one later with tests and rationale (§15). |
-| Local runtime | Docker Compose: API, UI, PostgreSQL/pgvector, optional Ollama | Reproducible local environment; local model resource needs depend on the developer's machine. |
+| Local runtime | Docker Compose: API, UI, PostgreSQL/pgvector. Ollama is optional and runs outside Compose; the Compose API answers with the matching passages unless it is configured to reach Ollama (see the quickstart) | Reproducible local environment; local model resource needs depend on the developer's machine. |
 | Test/quality | pytest, HTTPX, Ruff, mypy or pyright, Vitest/React Testing Library, Playwright smoke path | Verify business behavior, not only line coverage. |
 | CI | GitHub Actions | Re-run lint, type checks, tests, and build on pull requests. No secrets required for core CI. |
 | Cloud (later) | One provider only, likely AWS if target vacancies support it | Use managed Postgres, object storage, and container hosting only after local MVP works; monitor costs and destroy resources when not needed. |
@@ -80,9 +80,13 @@ flowchart LR
     ING --> PARSE[Parser and chunker]
     PARSE --> EMB[Embedding provider]
     QA --> RET[Retriever]
+    QA --> EMB
     RET --> DB[(PostgreSQL + pgvector)]
     DOC --> DB
     ING --> DB
+    QA --> DB
+    API --> CLEAN[Question cleanup thread]
+    CLEAN --> DB
     API --> STORE[(Local file volume in MVP)]
     QA --> LLM[LLM provider interface]
     EMB --> LOCAL[Local embedding model]
@@ -164,40 +168,67 @@ sequenceDiagram
     participant Auth as Auth/Authorization
     participant QA as QuestionAnswerService
     participant Embed as EmbeddingProvider
-    participant Ret as Retriever
+    participant Ret as Retriever (ChunkRepository)
     participant DB as PostgreSQL/pgvector
-    participant Prompt as PromptBuilder
-    participant LLM as LLMProvider
+    participant Ground as Grounding rules
+    participant LLM as LLMProvider (Ollama)
 
     User->>UI: Ask a question in a workspace
     UI->>API: POST /api/v1/workspaces/{id}/questions
-    API->>Auth: Validate identity and workspace access
-    Auth-->>API: Authorized principal
-    API->>QA: answer(question, workspace)
-    QA->>Embed: Embed question
-    Embed-->>QA: Query vector
-    QA->>Ret: Retrieve top-k authorized chunks
-    Ret->>DB: Similarity search scoped to workspace and ready documents
-    DB-->>Ret: Ranked chunks with document/page metadata
-    Ret-->>QA: Evidence + scores
-    QA->>QA: Apply relevance threshold and context budget
-    alt Evidence insufficient
-      QA-->>API: Abstention + empty citations
-    else Evidence sufficient
-      QA->>Prompt: Build grounded prompt from question and evidence
-      Prompt-->>QA: Prompt with untrusted context clearly delimited
-      QA->>LLM: Generate answer with temperature/config limits
-      LLM-->>QA: Answer text
-      QA->>QA: Validate citation IDs against retrieved evidence
-      QA-->>API: Answer + validated citations + request ID
+    API->>Auth: Validate identity
+    Auth-->>API: Signed-in user
+    API->>API: Tidy the text onto one line, 422 unless 1 to 1000 characters
+    API->>QA: ask(text, workspace, user)
+    QA->>DB: Check workspace membership (404 if none)
+    QA->>Embed: Embed the question
+    Embed-->>QA: Query vector, or unavailable (503 embedding_unavailable)
+    QA->>Ret: Find the 5 closest chunks
+    Ret->>DB: Cosine search over ready documents in this workspace, for its members only
+    DB-->>Ret: Chunks with document, page or section, and similarity
+    Ret-->>QA: Passages
+    QA->>QA: Keep passages with a similarity of at least 0.5 as evidence
+    alt No indexed documents, or no evidence
+      QA->>QA: Abstain (no_indexed_documents or weak_evidence) without calling the model
+    else No model configured
+      QA->>QA: Search-only answer: the evidence passages, numbered as citations
+    else Model configured
+      QA->>Ground: Build the prompt from the question and evidence
+      Ground-->>QA: Rules, then passages S1 to Sn between per-request markers, within the budget
+      QA->>LLM: Chat request at temperature 0, with no tools
+      alt Model replies
+        LLM-->>QA: Reply text
+        QA->>Ground: Check the reply against the passages in the prompt
+        Ground-->>QA: Answer with valid citations, or abstention (insufficient_evidence or uncited_answer)
+      else No reply, an error, or a timeout
+        LLM-->>QA: Unavailable
+        QA->>QA: Search-only answer, as without a model
+      end
     end
-    API-->>UI: JSON answer, citations, and abstention status
-    UI-->>User: Render answer and clickable sources
+    QA->>DB: Check membership again and lock the cited documents (FOR SHARE)
+    alt A cited document was deleted meanwhile
+      QA-->>API: 409 answer_sources_changed, nothing stored
+    else Sources unchanged
+      QA->>DB: Store the question, answer, and citations, and commit
+      QA-->>API: Stored question, deleted automatically 3 days later
+    end
+    API-->>UI: 201 with the answer, numbered citations, and any abstention reason
+    UI-->>User: Answer with links to its sources, or why there is none
 ```
+
+Implementation note: the question is embedded with the same local model as the documents. No database transaction stays open while the question is embedded or the model writes, which can take a minute or more with a local model (`LLM_TIMEOUT_SECONDS`, 120 by default), so before storing the answer the service checks the caller's membership again and locks the documents it cites; if one was deleted meanwhile, it stores nothing and returns `409`. The prompt has two messages: the rules, then the passages and the question. Passages are added whole, in rank order, while they fit a 6000-character budget (`ANSWER_CONTEXT_CHARACTERS`), and the API refuses to start if that budget, counted cautiously at 3 characters per token, doesn't leave 1792 tokens of the model's context window (`OLLAMA_CONTEXT_TOKENS`, 4096 by default) for the rules, the question, and an answer of up to 768 tokens. Passages are labelled S1, S2, and so on, without their document names, which are user-supplied text too, and each sits between begin and end markers that carry a random value chosen for each request, so a document can't fake the end of its passage. The rules say the passages are untrusted and never instructions, that every fact must come from them with a citation such as [S1], and that the reply must be exactly `INSUFFICIENT_EVIDENCE` when they don't answer the question. The reply check keeps only citations to passages that were in the prompt and renumbers them [1], [2], and so on, in order of first use; a reply of `INSUFFICIENT_EVIDENCE`, or one without a valid citation, becomes an abstention, which keeps no text and no citations. Without a model, or when it doesn't reply, the evidence passages are the answer (`search_only`), so the user still sees where the documents discuss the question. The web app shows each answer with numbered links to its sources, each with its document, page or section, similarity, passage, and a download button, and lists the user's questions from the last 3 days.
+
+Limitations as of Phase 4 (none of this has been measured yet; Phase 5 does that):
+
+- The evidence threshold (0.5) and the number of passages (5) are provisional. In one local run with a few synthetic documents, passages from an unrelated document scored up to about 0.71, and a question that no document answered passed the threshold before the model declined it, so the threshold alone doesn't separate answerable questions from the rest.
+- The citation check confirms that each cited passage was in the prompt, not that it supports the sentence citing it, so the model can still misread or misstate a passage. The answer view says to check the sources and that the answer isn't professional advice.
+- The markers and rules reduce, but don't remove, the chance that instructions inside a document steer an answer. In the same run the model ignored a planted instruction; that is a single observation, not proof. The model has no tools and sees only its prompt, so it can't act beyond writing text.
+- Vector search through the HNSW index is approximate: it can miss a close passage, and pgvector ends a filtered scan after a set number of index entries (`hnsw.max_scan_tuples`), so in a large database a workspace could get fewer than 5 passages.
+- A question holds an API worker thread while the model writes, for up to the 120-second timeout, so many questions at once would slow the API (§15).
+- Models that reason before answering can use up the 768-token answer limit while reasoning. The default model answers without a reasoning phase, and a reply whose reasoning never ends counts as no reply.
 
 ### 6.3 Delete flow
 
-Authorize the caller; mark the document `deleting`, so downloads, retries, and indexing leave it alone; delete the file from storage; then delete the document row, which deletes its chunks and vectors with it (`ON DELETE CASCADE`). If the file can't be deleted, the API returns an error and the document stays `deleting`, so the user can delete it again, rather than reporting success while data remains. Never allow a document ID guess to bypass workspace authorization: a document in a workspace the caller can't access returns `404`, the same as one that doesn't exist.
+Authorize the caller; mark the document `deleting`, so downloads, retries, and indexing leave it alone, and in the same transaction delete the questions whose answers cite it, because an answer can quote its sources; delete the file from storage; then delete the document row, which deletes its chunks and vectors with it (`ON DELETE CASCADE`). If the file can't be deleted, the API returns an error and the document stays `deleting`, so the user can delete it again, rather than reporting success while data remains. Never allow a document ID guess to bypass workspace authorization: a document in a workspace the caller can't access returns `404`, the same as one that doesn't exist.
 
 ## 7. Proposed code layout
 
@@ -205,17 +236,18 @@ Authorize the caller; mark the document `deleting`, so downloads, retries, and i
 evidence-backed-knowledge-assistant/
   backend/
     app/
-      main.py                 # FastAPI app and lifecycle; starts and stops the ingestion worker
+      main.py                 # FastAPI app and lifecycle; starts and stops the background workers
       cli.py                  # maintenance commands: download the embedding model
       api/                    # health checks and shared request dependencies
       api/v1/                 # routers, request/response schemas, streamed uploads
       core/                   # settings, database, errors, middleware, passwords, sessions
       db/                     # SQLAlchemy models
-      domain/                 # domain rules: file types, names, roles, chunking, indexing failures
-      services/               # auth, workspace, document, and ingestion use cases; Q&A later
-      repositories/           # SQLAlchemy persistence adapters, including document chunks
-      providers/              # storage, parser, and embedding adapters; LLM adapter later
-      workers/                # background ingestion worker (a thread in the API process)
+      domain/                 # domain rules: file types, names, roles, chunking, indexing failures,
+                              #   questions, prompt building and citation checks
+      services/               # auth, workspace, document, ingestion, and question use cases
+      repositories/           # SQLAlchemy persistence adapters, including chunks and questions
+      providers/              # storage, parser, embedding, and language-model (Ollama) adapters
+      workers/                # background threads in the API process: ingestion, question cleanup
     alembic/                  # Alembic migrations (alembic.ini beside it)
     models/                   # downloaded embedding model (git-ignored)
     storage/                  # uploaded files when the API runs on the host (git-ignored)
@@ -228,7 +260,7 @@ evidence-backed-knowledge-assistant/
       features/auth/          # sign-in, registration, service status
       features/workspaces/    # workspace list, creation, selection
       features/documents/     # upload queue, list, live status, retry, download, delete
-      features/questions/     # question form, answer, citations (Phase 4)
+      features/questions/     # question form, recent questions, answers and their sources
       test/                   # shared test setup and API fakes
     Dockerfile                # frontend image, built from this folder
   evals/
@@ -298,14 +330,18 @@ classDiagram
     class Answer {
       +UUID id
       +UUID question_id
+      +AnswerMode mode
       +string text
-      +bool abstained
+      +AbstentionReason abstention_reason
       +string model_name
     }
     class Citation {
+      +UUID id
       +UUID answer_id
+      +int number
+      +UUID document_id
       +UUID chunk_id
-      +float relevance_score
+      +float similarity
     }
     class DocumentService {
       +upload(file, workspace_id, principal)
@@ -317,7 +353,16 @@ classDiagram
       +reprocess(document_id)
     }
     class QuestionAnswerService {
-      +answer(question, workspace_id, principal)
+      +ask(text, workspace_id, principal)
+      +list_recent(workspace_id, principal)
+    }
+    class Grounding {
+      <<module>>
+      +build_prompt(question, passages, budget) Prompt
+      +check_answer(reply, sources) CheckedAnswer
+    }
+    class QuestionCleanupWorker {
+      +run_once()
     }
     class Parser {
       <<interface>>
@@ -328,12 +373,9 @@ classDiagram
       +embed_documents(texts) Vector[]
       +embed_query(text) Vector
     }
-    class Retriever {
-      +search(query_vector, workspace_id, top_k) RetrievedChunk[]
-    }
     class LLMProvider {
       <<interface>>
-      +generate(messages, options) GenerationResult
+      +generate(messages) Generation
     }
     class Storage {
       <<interface>>
@@ -346,12 +388,20 @@ classDiagram
       +create(document)
       +get_authorized(id, principal)
       +set_status(id, status)
+      +lock_ready(ids)
     }
     class ChunkRepository {
       <<interface>>
       +replace_for_document(id, chunks)
-      +search(vector, workspace_id, top_k)
+      +search_workspace(workspace_id, user_id, vector, top_k) Passage[]
       +delete_for_document(id)
+    }
+    class QuestionRepository {
+      <<interface>>
+      +add_answered(workspace_id, user_id, text, answer)
+      +list_recent_for_member(workspace_id, user_id)
+      +delete_citing_document(document_id)
+      +delete_expired()
     }
 
     User "1" --> "0..*" Membership
@@ -359,10 +409,13 @@ classDiagram
     Workspace "1" --> "0..*" Document
     Document "1" *-- "0..*" DocumentChunk
     Workspace "1" --> "0..*" Question
-    Question "1" --> "0..1" Answer
+    User "1" --> "0..*" Question
+    Question "1" *-- "1" Answer
     Answer "1" *-- "0..*" Citation
     Citation "*" --> "1" DocumentChunk
+    Citation "*" --> "1" Document
     DocumentService --> DocumentRepository
+    DocumentService --> QuestionRepository
     DocumentService --> Storage
     DocumentService --> IngestionService
     IngestionService --> Parser
@@ -370,10 +423,15 @@ classDiagram
     IngestionService --> DocumentRepository
     IngestionService --> ChunkRepository
     QuestionAnswerService --> EmbeddingProvider
-    QuestionAnswerService --> Retriever
+    QuestionAnswerService --> ChunkRepository
+    QuestionAnswerService --> Grounding
     QuestionAnswerService --> LLMProvider
-    Retriever --> ChunkRepository
+    QuestionAnswerService --> DocumentRepository
+    QuestionAnswerService --> QuestionRepository
+    QuestionCleanupWorker --> QuestionRepository
 ```
+
+In this diagram, `ChunkRepository.search_workspace` plays the retriever of §5 and §6.2, and `Grounding` is a module of plain functions.
 
 ## 9. Data model and API contract
 
@@ -385,7 +443,7 @@ classDiagram
 - `workspace_memberships`: workspace ID, user ID, role, unique constraint on the pair.
 - `documents`: ID, workspace ID, original display name, opaque storage key, MIME type, byte size, SHA-256, status, safe failure code/message, timestamps.
 - `document_chunks`: ID, document ID, ordinal (reading order), text, page number (PDF) or section heading (DOCX), a 384-dimension embedding vector, created timestamp. Unique per document and ordinal, which also indexes the foreign key; deleted with their document. Vector search uses an HNSW index on cosine distance with pgvector's default settings; revisit the index choice against the measured dataset size and evaluation results.
-- `questions`, `answers`, `citations`: store only what is needed for usability/evaluation, and delete it 3 days (72 hours) after the question was asked. A question records who asked it, its workspace, its text, and when it was asked; its answer records the text or the abstention, and which model answered or that search-only mode did; each citation records the document, the chunk, and its page or section. Only the user who asked can see a question. Expired questions are never returned, even before the cleanup has run, and the cleanup runs when the API starts and then every hour. Deleting a document also deletes the questions whose answers cite it, because an answer can quote its sources, and deleting a workspace deletes its questions. Question and answer text is never logged.
+- `questions`, `answers`, `citations`: store only what is needed for usability/evaluation, and delete it 3 days (72 hours) after the question was asked. A question records who asked it, its workspace, its text (tidied onto one line, 1 to 1000 characters), and when it was asked. Its one answer records the mode (`generated` by a model, or `search_only`), the text (only for a generated answer that doesn't abstain), the abstention reason if any (`no_indexed_documents`, `weak_evidence`, `insufficient_evidence`, or `uncited_answer`), and the model asked, if any; database checks keep these consistent. Each citation records its number in the answer ([1], [2], and so on), the document, the chunk (and so its page or section), and the chunk's similarity to the question when it was asked. Only the user who asked can see a question. Expired questions are never returned, even before the cleanup has run, and the cleanup runs when the API starts and then every hour. Deleting a document also deletes the questions whose answers cite it, because an answer can quote its sources, and deleting a workspace deletes its questions. Question and answer text is never logged.
 
 ### Initial REST endpoints
 
@@ -398,8 +456,8 @@ classDiagram
 - `GET /api/v1/documents/{document_id}/file` — download the original file as an attachment, after authorization; responses are not cached.
 - `POST /api/v1/documents/{document_id}/retry` — queue a `failed` document to be indexed again, clearing its failure; returns `202`. A queued or processing document is returned unchanged; a `ready` one gets `409` (`document_already_indexed`), and one being deleted gets `409` (`document_being_deleted`).
 - `DELETE /api/v1/documents/{document_id}` — delete the document, its stored file, and its indexed chunks.
-- `POST /api/v1/workspaces/{workspace_id}/questions` — ask a question; returns answer, citations, and abstention flag, and stores them for 3 days.
-- `GET /api/v1/workspaces/{workspace_id}/questions` — the caller's questions from the last 3 days, with their answers and citations, newest first.
+- `POST /api/v1/workspaces/{workspace_id}/questions` — ask a question (`{"text": "..."}`, 1 to 1000 characters once tidied onto one line); returns `201` with the stored question, when it will be deleted, and its answer: mode, text, abstention flag and reason, model name, and numbered citations, each with the document, page or section, passage, and similarity. A local model can take a minute or more. Returns `503` (`embedding_unavailable`) when the embedding model can't be used, and `409` (`answer_sources_changed`), storing nothing, when a document the answer cites was deleted while the answer was being written.
+- `GET /api/v1/workspaces/{workspace_id}/questions` — the caller's questions from the last 3 days, with their answers and citations, newest first, at most 50.
 - `GET /health/live` and `/health/ready` — process and dependency readiness; do not leak credentials/configuration.
 
 Use consistent error JSON with a stable code, human-readable message, and request ID: `{"error": {"code": "...", "message": "...", "request_id": "...", "fields": [...]}}`, where `fields` lists invalid inputs and appears only for validation errors. Every response carries the same ID in an `X-Request-ID` header, so a user can quote it and it can be found in the logs. A workspace or document the caller cannot access returns `404`, the same as one that does not exist, so IDs reveal nothing. Never echo stack traces, provider credentials, or uploaded content in error responses.
@@ -428,7 +486,7 @@ Use consistent error JSON with a stable code, human-readable message, and reques
 
 ### Phase 4 — Grounded question answering
 - Implement question embedding, workspace-scoped retrieval, relevance threshold, context budget, prompt builder with untrusted-source delimiting, provider adapter, citation validation, abstention, answer UI, and a question history kept for 3 days (§9).
-- **Done when:** integration tests confirm correct citations, no cross-workspace retrieval, abstention on unsupported questions, and that stored questions expire after 3 days. Document model/provider limitations.
+- **Done when:** integration tests confirm correct citations, no cross-workspace retrieval, abstention on unsupported questions, and that stored questions expire after 3 days. Document model/provider limitations (§6.2).
 
 ### Phase 5 — Evaluation and hardening
 - Create a small manually reviewed evaluation set with question, expected document/page, and expected answer facts. Measure retrieval hit rate/recall at k and citation correctness. Evaluate unsupported questions and prompt-injection-like content as robustness tests, not as proof of security.
@@ -455,10 +513,10 @@ Use consistent error JSON with a stable code, human-readable message, and reques
 - Treat all file names, MIME headers, document text, questions, and model output as untrusted.
 - Enforce identity and workspace authorization in service/repository queries, not only in the UI.
 - Use server-generated storage keys; prevent path traversal; limit file size, page count, extracted text, and parsing time; guard against decompression bombs and malformed files.
-- Store secrets in environment/secret manager, never in Git or frontend bundles. Keep logs free of secrets, full document content, and unnecessary personal data.
+- Store secrets in environment/secret manager, never in Git or frontend bundles. Keep logs free of secrets, full document content, question and answer text, and unnecessary personal data.
 - Use parameterized database access, migrations, dependency updates, secure cookies/token practices, CORS allowlists, and rate limits.
-- Delimit retrieved text as untrusted evidence in prompts; the model must not follow instructions found inside documents. This mitigates but does not eliminate prompt-injection risk; authorization and tool permissions must not depend on model compliance.
-- Validate citation identifiers against retrieved chunks; model-generated URLs/IDs are not trusted.
+- Delimit retrieved text as untrusted evidence in prompts; the model must not follow instructions found inside documents. Each passage sits between markers that carry a random value chosen for each request, and the model is offered no tools, so all it can do is return text (§6.2). This mitigates but does not eliminate prompt-injection risk; authorization and tool permissions must not depend on model compliance.
+- Validate citation identifiers against retrieved chunks; model-generated URLs/IDs are not trusted. The model sees only passage labels (S1, S2, and so on), never document names, IDs, or URLs, and citations to labels that weren't in its prompt are dropped.
 - Define data retention and deletion. Questions, answers, and citations are deleted 3 days after the question was asked (§9); documents, their files, and their chunks are kept until the user deletes them. Make local data directories easy to clear; for a hosted demo, disclose provider data handling and retention before sending user content to third parties.
 - This project is not certified for regulated/clinical workloads. Use public or synthetic documents only.
 
@@ -487,7 +545,9 @@ Resume bullet template (replace brackets with verified values): “Built a Pytho
 - Whether a newer, permissively licensed small model should replace the default local model (`qwen3:4b-instruct-2507-q4_K_M`), based on evaluation.
 - Cloud provider and deployment service, pending current target-job research and cost estimate.
 - Whether durable queueing is needed, based on observed ingestion reliability and workload.
+- Whether answers should be written outside the HTTP request (a queue, or streamed replies), if waiting for the model holds up the API.
 - Keyword/hybrid search, reranking, and additional vector index tuning, based on evaluation evidence.
+- The evidence threshold (0.5) and the number of passages per question (5), based on the Phase 5 evaluation.
 - Full authentication provider, if the project is used beyond a portfolio demo.
 
 ## 16. Suggested first implementation milestone
@@ -496,7 +556,7 @@ The first coding milestone should be **Phase 1 only**: create a clean repository
 
 ## Local quickstart
 
-What works today (Phases 1 to 3): create a local account and workspaces, then upload, list, download, and delete PDF, Word (.docx), and plain-text files. Each uploaded document is indexed in the background: its text is extracted, split into chunks, and embedded with a local model, while its status moves from **Queued** through **Processing** to **Ready**. A document that can't be indexed shows **Failed**, a message that says what to do, and a **Retry** button. Searching the indexed text and answering questions arrive in Phase 4. Upload only documents you are allowed to use, and never real patient or confidential data.
+What works today (Phases 1 to 4): create a local account and workspaces, then upload, list, download, and delete PDF, Word (.docx), and plain-text files. Each uploaded document is indexed in the background: its text is extracted, split into chunks, and embedded with a local model, while its status moves from **Queued** through **Processing** to **Ready**. A document that can't be indexed shows **Failed**, a message that says what to do, and a **Retry** button. Once a document is **Ready**, ask questions about the workspace's documents. With a local Ollama model, the answer is written from the closest passages and cites them by document and page or section; without one, the closest passages are the answer. When the documents don't cover a question, you're told so instead of getting a guess. Questions and answers are deleted after 3 days, or sooner if you delete a document they cite. Answer quality hasn't been measured yet; that is Phase 5. Upload only documents you are allowed to use, and never real patient or confidential data.
 
 From the project root, copy `.env.example` to `.env`; Docker Compose, the API, and the Vite dev server all take their settings from this one file. Then run:
 
@@ -508,9 +568,11 @@ docker compose run --rm backend python -m app.cli download-embedding-model
 
 The last command downloads the embedding model (about 135 MB) once, into the `embedding_models` volume, and checks that it loads; indexing itself never downloads anything. Documents uploaded before the download fail with a message asking for it; select **Retry** on them afterwards.
 
+Under Compose, answers list the closest passages, because the API container runs with `LLM_PROVIDER=none` by default: Ollama isn't part of the stack, and on the host it normally listens on `127.0.0.1` only, out of the containers' reach. To have a model write the answers, run Ollama where the API container can reach it, pull the model there once (`ollama pull qwen3:4b-instruct-2507-q4_K_M`, about 2.5 GB), and set `COMPOSE_LLM_PROVIDER=ollama` and `COMPOSE_OLLAMA_BASE_URL` in `.env`; this Compose setup hasn't been tested yet. Running the API directly on your machine (below) uses a local Ollama with the default settings.
+
 Open `http://localhost:5173`, check that the page reports the API and database as ready, and create an account. Registration is open by default; set `REGISTRATION_ENABLED=false` in `.env` once your accounts exist. The API health endpoints are `http://localhost:8000/health/live` and `http://localhost:8000/health/ready`. Uploaded files go to the `document_storage` volume under Compose, or to `backend/storage` (ignored by git) when the API runs directly on your machine; set `STORAGE_DIR` to put them elsewhere.
 
-Backend dependencies are locked in `backend/uv.lock`; install [uv](https://docs.astral.sh/uv/getting-started/installation/) first (CI uses uv 0.13.5). The first `uv sync` downloads PyTorch for the embedding model, so it takes a while. Run backend checks from `backend` with `uv sync --locked --extra dev`, then `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy app`, and `uv run pytest`. The API and database tests need PostgreSQL: they use their own database, `knowledge_assistant_test` on `127.0.0.1:5432` with the development credentials, which they create and migrate when needed and empty before each test. Set `TEST_DATABASE_URL` to use another database; its name must end in `_test`. Without a reachable server those tests are skipped; set `TEST_DATABASE_REQUIRED=1`, as CI does, to make them fail instead. Tests use a fake embedder, apart from one test marked `model` that loads the downloaded embedding model: it is skipped when the model is missing, and `TEST_MODEL_REQUIRED=1`, which CI also sets, makes it fail instead. Run frontend checks from `frontend` with `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`.
+Backend dependencies are locked in `backend/uv.lock`; install [uv](https://docs.astral.sh/uv/getting-started/installation/) first (CI uses uv 0.13.5). The first `uv sync` downloads PyTorch for the embedding model, so it takes a while. Run backend checks from `backend` with `uv sync --locked --extra dev`, then `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy app`, and `uv run pytest`. The API and database tests need PostgreSQL: they use their own database, `knowledge_assistant_test` on `127.0.0.1:5432` with the development credentials, which they create and migrate when needed and empty before each test. Set `TEST_DATABASE_URL` to use another database; its name must end in `_test`. Without a reachable server those tests are skipped; set `TEST_DATABASE_REQUIRED=1`, as CI does, to make them fail instead. Tests use a fake embedder, apart from one test marked `model` that loads the downloaded embedding model: it is skipped when the model is missing, and `TEST_MODEL_REQUIRED=1`, which CI also sets, makes it fail instead. Tests never call Ollama: they turn the model off (`LLM_PROVIDER=none`) and, when a test needs written answers, give the API a stand-in model with set replies. Run frontend checks from `frontend` with `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`.
 
 Stop local services with `docker compose down`; add `-v` only if you intentionally want to delete the local database, the uploaded files, and the downloaded model, which all live in Compose volumes.
 
@@ -546,6 +608,8 @@ In a second terminal, from `frontend`:
 npm ci
 npm run dev
 ```
+
+Answers written by a model are optional. Install [Ollama](https://ollama.com/download) as your own user (on Windows, the zip from its GitHub releases page needs no installer or administrator rights), start it with `ollama serve`, and pull the model once with `ollama pull qwen3:4b-instruct-2507-q4_K_M` (about 2.5 GB). The API's default settings (`LLM_PROVIDER=ollama`, `OLLAMA_BASE_URL=http://127.0.0.1:11434`) then use it; while it isn't running, answers list the closest passages instead. Set `LLM_PROVIDER=none` in `.env` to stop asking it. Without a suitable GPU the model can be much slower; raise `LLM_TIMEOUT_SECONDS` (at most 600) if answers time out.
 
 `uv sync` and `npm ci` are only needed after a fresh clone or a lock file change, and the model download only once: the model goes to `backend/models` (ignored by git), or to the folder set in `EMBEDDING_MODEL_DIR`. Open `http://localhost:5173`; the page should report that the API and database are ready, and you can create an account. PostgreSQL, the API, and the Vite dev server listen on localhost only, so other machines on your network can't reach them. Stop the web app and the API with Ctrl+C, then the database with `pg_ctl -D <data-folder> stop`. This database and the Compose `db` service both use port 5432: run only one of them, or set `POSTGRES_PORT` in `.env` to move the Compose one.
 

@@ -80,6 +80,49 @@ export function documentJson(overrides: Record<string, unknown> = {}) {
   };
 }
 
+export function citationJson(overrides: Record<string, unknown> = {}) {
+  return {
+    number: 1,
+    document_id: "doc-1",
+    document_name: "guide.pdf",
+    chunk_id: "chunk-1",
+    page_number: 3,
+    section: null,
+    excerpt: "New staff get 25 days of leave a year.",
+    similarity: 0.71234,
+    ...overrides,
+  };
+}
+
+export const MODEL_NAME = "qwen3:4b-instruct-2507-q4_K_M";
+
+export function answerJson(overrides: Record<string, unknown> = {}) {
+  return {
+    mode: "generated",
+    text: "New staff get 25 days of leave [1].",
+    abstained: false,
+    abstention_reason: null,
+    model_name: MODEL_NAME,
+    citations: [citationJson()],
+    ...overrides,
+  };
+}
+
+export function questionJson(
+  overrides: Record<string, unknown> = {},
+  answer: Record<string, unknown> = {},
+) {
+  return {
+    id: "q-1",
+    workspace_id: "ws-1",
+    text: "How much leave do new staff get?",
+    created_at: "2025-01-04T09:00:00Z",
+    expires_at: "2025-01-07T09:00:00Z",
+    answer: answerJson(answer),
+    ...overrides,
+  };
+}
+
 /**
  * Replaces fetch with a router keyed by method and path. Tests can change `routes` later to
  * simulate the API changing between requests. Unknown routes get a 501 error response.

@@ -12,10 +12,19 @@ import {
   readBlobText,
   unauthenticatedResponse,
 } from "../../test/api";
+import type { QuestionPanelProps } from "../questions/QuestionPanel";
 import DocumentLibrary from "./DocumentLibrary";
 import { saveBlob } from "./saveBlob";
 
 vi.mock("./saveBlob", () => ({ saveBlob: vi.fn() }));
+
+// The panel has its own tests; here it only shows what the library tells it.
+vi.mock("../questions/QuestionPanel", () => ({
+  default: ({ readyCount, deletedDocumentIds }: QuestionPanelProps) =>
+    `Question panel: ${readyCount ?? "unknown"} ready, deleted ${
+      [...deletedDocumentIds].join(" ") || "none"
+    }`,
+}));
 
 const WORKSPACE: Workspace = {
   id: "ws-1",
@@ -252,7 +261,10 @@ describe("DocumentLibrary", () => {
     expect(alert).toHaveTextContent("Reference req-del");
     expect(screen.getByText("Deleting")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Download guide.pdf" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Delete guide.pdf" })).toHaveFocus();
+    // The row moves focus in an effect, which can run just after the alert appears.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Delete guide.pdf" })).toHaveFocus(),
+    );
 
     routes[DELETE] = emptyResponse();
     fireEvent.click(screen.getByRole("button", { name: "Delete guide.pdf" }));
@@ -262,6 +274,28 @@ describe("DocumentLibrary", () => {
     );
 
     expect(await screen.findByText("Deleted guide.pdf.")).toBeInTheDocument();
+  });
+
+  it("tells the question panel which documents are ready and which were deleted", async () => {
+    installFetch({
+      [LIST]: listOf(
+        { status: "ready" },
+        { id: "doc-2", display_name: "manual.pdf", status: "ready" },
+        { id: "doc-3", display_name: "scan.pdf", status: "failed", failure_message: NO_TEXT },
+      ),
+      [DELETE]: emptyResponse(),
+    });
+    renderLibrary();
+
+    expect(screen.getByText("Question panel: unknown ready, deleted none")).toBeInTheDocument();
+    expect(await screen.findByText("Question panel: 2 ready, deleted none")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete guide.pdf" }));
+    fireEvent.click(
+      within(screen.getByRole("group")).getByRole("button", { name: "Delete guide.pdf" }),
+    );
+
+    expect(await screen.findByText("Question panel: 1 ready, deleted doc-1")).toBeInTheDocument();
   });
 
   it("downloads a document under its original name", async () => {
@@ -368,7 +402,9 @@ describe("DocumentLibrary", () => {
     expect(within(row).getByText("Queued")).toBeInTheDocument();
     expect(within(row).queryByText(NO_TEXT)).not.toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: "Retry scan.pdf" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Download scan.pdf" })).toHaveFocus();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Download scan.pdf" })).toHaveFocus(),
+    );
     expect(callsTo(calls, RETRY)[0]?.init.headers).toMatchObject({ "X-CSRF-Protection": "1" });
 
     expect(await screen.findByText("scan.pdf is ready.")).toBeInTheDocument();
@@ -434,7 +470,9 @@ describe("DocumentLibrary", () => {
     expect(within(rowFor("scan.pdf")).getByText("Ready")).toBeInTheDocument();
     expect(screen.queryByText(NO_TEXT)).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Download scan.pdf" })).toHaveFocus();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Download scan.pdf" })).toHaveFocus(),
+    );
   });
 
   it.each([
@@ -460,7 +498,9 @@ describe("DocumentLibrary", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(example.message);
     expect(within(rowFor("scan.pdf")).getByText(example.status)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: example.focused })).toHaveFocus();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: example.focused })).toHaveFocus(),
+    );
   });
 
   it("reports an ended session from a retry", async () => {

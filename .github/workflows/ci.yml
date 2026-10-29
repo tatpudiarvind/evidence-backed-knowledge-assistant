@@ -124,7 +124,7 @@ jobs:
           curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors http://localhost:8000/health/ready
           echo
           curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors --output /dev/null http://localhost:5173/
-      - name: Check sign-up, upload, indexing, download, and delete through the API
+      - name: Check sign-up, upload, indexing, a question, download, and delete through the API
         run: |
           api=http://localhost:8000/api/v1
           jar="$(mktemp)"
@@ -161,6 +161,15 @@ jobs:
           chunks="$(count_chunks "$document_id")"
           echo "chunks stored: ${chunks}"
           test "$chunks" -gt 0
+          # Compose runs without a language model, so the answer lists the matching passages.
+          question="$(curl --fail --silent --show-error -b "$jar" \
+            -H 'Content-Type: application/json' -H 'X-CSRF-Protection: 1' \
+            -d '{"text":"How long are project records kept?"}' \
+            "$api/workspaces/$workspace_id/questions")"
+          echo "$question"
+          test "$(echo "$question" | jq -r .answer.mode)" = "search_only"
+          test "$(echo "$question" | jq -r .answer.abstained)" = "false"
+          test "$(echo "$question" | jq -r '.answer.citations[0].document_id')" = "$document_id"
           curl --fail --silent --show-error -b "$jar" "$api/documents/$document_id/file" \
             | cmp - /tmp/smoke.txt
           curl --fail --silent --show-error -b "$jar" -H 'X-CSRF-Protection: 1' \
@@ -168,6 +177,9 @@ jobs:
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' -b "$jar" \
             "$api/documents/$document_id")" = "404"
           test "$(count_chunks "$document_id")" = "0"
+          # Deleting a document deletes the answers that cite it.
+          test "$(curl --fail --silent --show-error -b "$jar" \
+            "$api/workspaces/$workspace_id/questions" | jq '.items | length')" = "0"
       - name: Check readiness reports 503 when the database stops
         run: |
           docker compose stop db

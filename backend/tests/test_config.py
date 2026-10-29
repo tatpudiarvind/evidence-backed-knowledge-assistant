@@ -49,9 +49,19 @@ def test_explicit_cors_origins_are_accepted() -> None:
         {"parse_timeout_seconds": 0},
         {"embedding_batch_size": 0},
         {"embedding_batch_size": 513},
+        {"llm_timeout_seconds": 0},
+        {"llm_timeout_seconds": 601},
+        {"ollama_context_tokens": 1023},
+        {"ollama_context_tokens": 131_073},
+        {"retrieval_top_k": 0},
+        {"retrieval_top_k": 21},
+        {"retrieval_min_similarity": -0.01},
+        {"retrieval_min_similarity": 1.01},
+        {"answer_context_characters": 999},
+        {"answer_context_characters": 50_001},
     ],
 )
-def test_limits_must_stay_in_range(overrides: dict[str, int]) -> None:
+def test_limits_must_stay_in_range(overrides: dict[str, float]) -> None:
     with pytest.raises(ValidationError):
         make_settings(**overrides)
 
@@ -70,3 +80,44 @@ def test_chunk_overlap_is_at_most_a_quarter_of_the_chunk_size() -> None:
 def test_the_model_revision_must_be_a_full_commit_hash(revision: str) -> None:
     with pytest.raises(ValidationError):
         make_settings(embedding_model_revision=revision)
+
+
+def test_answers_come_from_local_ollama_by_default() -> None:
+    fields = config.Settings.model_fields
+
+    assert fields["llm_provider"].default == "ollama"
+    assert fields["ollama_base_url"].default == "http://127.0.0.1:11434"
+
+
+@pytest.mark.parametrize("provider", ["openai", "", "OLLAMA"])
+def test_only_known_language_model_providers_are_accepted(provider: str) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(llm_provider=provider)
+
+
+@pytest.mark.parametrize("url", ["127.0.0.1:11434", "ftp://127.0.0.1", "file:///tmp/x", ""])
+def test_the_ollama_address_must_be_a_web_address(url: str) -> None:
+    with pytest.raises(ValidationError, match="OLLAMA_BASE_URL"):
+        make_settings(ollama_base_url=url)
+
+
+def test_a_trailing_slash_is_removed_from_the_ollama_address() -> None:
+    settings = make_settings(ollama_base_url="http://ollama.internal:11434/")
+
+    assert settings.ollama_base_url == "http://ollama.internal:11434"
+
+
+def test_the_passages_must_fit_in_the_models_context_window() -> None:
+    # 6000 characters is about 2000 tokens, leaving 1792 for the rules, question, and answer.
+    fits = make_settings(llm_provider="ollama", answer_context_characters=6000)
+    assert fits.ollama_context_tokens == 4096
+
+    with pytest.raises(ValidationError, match="ANSWER_CONTEXT_CHARACTERS"):
+        make_settings(llm_provider="ollama", answer_context_characters=7000)
+
+    larger = make_settings(
+        llm_provider="ollama", answer_context_characters=7000, ollama_context_tokens=8192
+    )
+    assert larger.answer_context_characters == 7000
+    # Without a model, the passages are shown to no model, so any length is fine.
+    assert make_settings(answer_context_characters=50_000).llm_provider == "none"
