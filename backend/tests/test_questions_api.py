@@ -1,7 +1,7 @@
 """Asking questions, and the 3-day question history (P4-01 - P4-06, P4-09, P4-11; D-55).
 
 `HashingEmbeddings` stands in for the embedding model, so texts that share words are similar,
-and `ScriptedLanguageModel` stands in for Ollama. With the provisional threshold of 0.5, each
+and `ScriptedLanguageModel` stands in for Ollama. With the threshold of 0.5, each
 sample question below finds only the passage it shares most of its words with.
 """
 

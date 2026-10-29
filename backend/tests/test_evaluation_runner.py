@@ -221,6 +221,7 @@ def test_the_evaluation_indexes_the_corpus_and_asks_every_question(
         "model_unavailable": None,
     }
     assert "all_facts_stated" not in report["answers"]["with_facts"]
+    assert "forbidden_text" not in report["answers"]
     assert report["environment"]["pgvector"]
     # Nothing about the computer it ran on beyond what the results depend on.
     text = written.decode()
@@ -228,6 +229,8 @@ def test_the_evaluation_indexes_the_corpus_and_asks_every_question(
     assert not platform.node() or platform.node() not in text
     lines = summary_lines(report)
     assert lines[0].startswith(f"Retrieval only: {len(questions)} questions (")
+    assert any(line.startswith("Search-only answers: ") for line in lines)
+    assert not any(line.startswith("Forbidden text") for line in lines)
     assert lines[-1] == f"Evidence matches the search: {len(questions)}/{len(questions)}"
 
 
@@ -289,9 +292,14 @@ def test_with_a_model_its_prompts_replies_and_fallbacks_are_kept(
     assert report["timing"]["model_seconds"]["count"] == 3
     lines = summary_lines(report)
     assert lines[0].startswith("With model: 3 questions (2 answerable, 1 unanswerable)")
+    # The fallback that lists passages counts as an answer; the last line counts the fallbacks.
+    assert any(line.startswith("Answers: 2/2 questions with facts answered") for line in lines)
     assert (
         "  every fact stated: 1/2; facts stated 1/2, of which supported by a citation 1/1" in lines
     )
+    # None of these questions has forbidden text to look for.
+    assert report["answers"]["forbidden_text"]["questions"] == 0
+    assert not any(line.startswith("Forbidden text") for line in lines)
     assert lines[-1] == "Model didn't reply: 1/3"
 
 

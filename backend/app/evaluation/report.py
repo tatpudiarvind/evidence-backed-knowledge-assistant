@@ -160,7 +160,8 @@ def summary_lines(report: Json) -> list[str]:
             for mode, plans in index["plans"].items()
         ),
         f"  forced HNSW order equals exact order: {_fraction(index['index_same_order_as_exact'])}",
-        f"Answers: {_fraction(answers['with_facts']['answered'])} questions with facts answered, "
+        f"{'Answers' if report['run']['mode'] == 'with_model' else 'Search-only answers'}: "
+        f"{_fraction(answers['with_facts']['answered'])} questions with facts answered, "
         f"{_fraction(answers['with_facts']['cites_relevant'])} citing a passage that states one, "
         f"{_fraction(answers['with_facts']['correct_citations'])} citations correct; "
         f"{_fraction(answers['without_facts']['abstained'])} questions without facts declined.",
@@ -172,11 +173,13 @@ def summary_lines(report: Json) -> list[str]:
             f"{_fraction(with_facts['facts_stated'])}, of which supported by a citation "
             f"{_fraction(with_facts['facts_supported_by_citations'])}"
         )
-    forbidden = answers["forbidden_text"]
-    lines.append(
-        f"Forbidden text, over {forbidden['questions']} questions: in answers "
-        f"{_fraction(forbidden['in_answer'])}, in model replies {_fraction(forbidden['in_reply'])}"
-    )
+    forbidden = answers.get("forbidden_text")
+    if forbidden and forbidden["questions"]:
+        lines.append(
+            f"Forbidden text, over {forbidden['questions']} questions: in answers "
+            f"{_fraction(forbidden['in_answer'])}, in model replies "
+            f"{_fraction(forbidden['in_reply'])}, in prompts {_fraction(forbidden['in_prompt'])}"
+        )
     checks = report["checks"]
     lines.append(f"Evidence matches the search: {_fraction(checks['evidence_matches_search'])}")
     if checks["model_unavailable"] is not None:

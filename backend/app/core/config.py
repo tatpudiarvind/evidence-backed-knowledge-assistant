@@ -71,10 +71,11 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = Field(default=120, ge=1, le=600)
     # The model's context window, in tokens; the rules, passages, question, and answer share it.
     ollama_context_tokens: int = Field(default=4096, ge=1024, le=131_072)
-    # How many of the passages closest to a question are considered.
-    retrieval_top_k: int = Field(default=5, ge=1, le=20)
-    # Passages less similar to the question than this don't count as evidence. Provisional:
-    # it hasn't yet been measured against reviewed questions.
+    # How many of the passages closest to a question are considered. Set by the Phase 5
+    # evaluation's rule (docs/evaluation/): on its questions, more passages found no more facts.
+    retrieval_top_k: int = Field(default=4, ge=1, le=20)
+    # Passages less similar to the question than this don't count as evidence. Set by the
+    # evaluation's rule; it keeps out off-topic questions, not on-topic ones nothing answers.
     retrieval_min_similarity: float = Field(default=0.5, ge=0.0, le=1.0)
     # The most passage text the model is shown for one question, in characters.
     answer_context_characters: int = Field(default=6000, ge=1000, le=50_000)

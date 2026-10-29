@@ -316,7 +316,7 @@ def answer_summary(scores: Sequence[AnswerScore]) -> Json:
 
     A citation is correct when the passage it points to states one of the question's expected
     facts. Without a language model, the answer is the evidence itself, so there is no answer
-    text to check for facts.
+    text to check for facts or for forbidden text.
     """
     with_facts = [score for score in scores if score.question.expected_facts]
     without_facts = [score for score in scores if not score.question.expected_facts]
@@ -338,7 +338,6 @@ def answer_summary(scores: Sequence[AnswerScore]) -> Json:
             "abstained": count_true(score.abstained for score in without_facts),
             "abstention_reasons": _reasons(without_facts),
         },
-        "forbidden_text": _forbidden_summary(scores),
     }
     if with_text:
         summary["with_facts"] |= {
@@ -353,6 +352,8 @@ def answer_summary(scores: Sequence[AnswerScore]) -> Json:
                 sum(len(score.facts_supported) for score in with_facts), stated
             ),
         }
+        # Without a model there is no answer text, reply, or prompt to look in.
+        summary["forbidden_text"] = _forbidden_summary(scores)
     return summary
 
 

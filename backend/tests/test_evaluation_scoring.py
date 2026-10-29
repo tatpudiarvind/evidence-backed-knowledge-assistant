@@ -366,6 +366,7 @@ def test_search_only_answers_have_no_text_to_check_for_facts() -> None:
     summary = answer_summary(scores)
 
     assert "all_facts_stated" not in summary["with_facts"]
+    assert "forbidden_text" not in summary
     assert summary["with_facts"]["answered"] == {"count": 1, "of": 2, "share": 0.5}
     assert summary["with_facts"]["correct_citations"] == {"count": 1, "of": 2, "share": 0.5}
     assert summary["with_facts"]["abstention_reasons"] == {"weak_evidence": 1}
