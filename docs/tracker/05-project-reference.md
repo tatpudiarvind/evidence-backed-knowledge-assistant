@@ -225,7 +225,8 @@ Transitive versions (for example starlette 1.10.0) are locked in `backend/uv.loc
 | GET | `/api/v1/documents/{document_id}/file` | P2 | ✅ Implemented | 200; the original file as an attachment, with `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. 404 `document_file_missing` if the stored file is gone (D-39, P2-08) |
 | POST | `/api/v1/documents/{document_id}/retry` | P3 | ✅ Implemented | 202 with the document. A failed document is queued again, with its failure cleared, and the worker is woken; a queued or processing one is returned unchanged. 409 `document_already_indexed` for a ready document; 409 `document_being_deleted` while it's being deleted (D-50, P3-08) |
 | DELETE | `/api/v1/documents/{document_id}` | P2–P3 | ✅ Implemented | 204. Marks the document `deleting`, removes the stored file, then the row; the database deletes its chunks with it (`ON DELETE CASCADE`; V-108). If the file can't be removed: 500 `document_delete_failed`, and deleting again retries; meanwhile downloads and retries get 409 `document_being_deleted`. Indexing still running when the document is deleted saves nothing (P2-08, P3-12) |
-| POST | `/api/v1/workspaces/{workspace_id}/questions` | P4 | ⏳ Planned | Answer, citations, and abstention flag |
+| POST | `/api/v1/workspaces/{workspace_id}/questions` | P4 | ⏳ Planned | Answer, citations, and abstention flag; stores them for 3 days (D-55) |
+| GET | `/api/v1/workspaces/{workspace_id}/questions` | P4 | ⏳ Planned | The caller's questions from the last 3 days, with their answers and citations, newest first (D-55) |
 
 All `/api/v1` routes need the session cookie, except sign-up, sign-in, and sign-out. Every POST and DELETE request, including those three, also needs the header `X-CSRF-Protection: 1` (D-32).
 

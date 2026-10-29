@@ -385,7 +385,7 @@ classDiagram
 - `workspace_memberships`: workspace ID, user ID, role, unique constraint on the pair.
 - `documents`: ID, workspace ID, original display name, opaque storage key, MIME type, byte size, SHA-256, status, safe failure code/message, timestamps.
 - `document_chunks`: ID, document ID, ordinal (reading order), text, page number (PDF) or section heading (DOCX), a 384-dimension embedding vector, created timestamp. Unique per document and ordinal, which also indexes the foreign key; deleted with their document. Vector search uses an HNSW index on cosine distance with pgvector's default settings; revisit the index choice against the measured dataset size and evaluation results.
-- `questions`, `answers`, `citations` (optional for MVP persistence): store only what is needed for usability/evaluation. Define retention and deletion behavior before storing potentially sensitive question text.
+- `questions`, `answers`, `citations`: store only what is needed for usability/evaluation, and delete it 3 days (72 hours) after the question was asked. A question records who asked it, its workspace, its text, and when it was asked; its answer records the text or the abstention, and which model answered or that search-only mode did; each citation records the document, the chunk, and its page or section. Only the user who asked can see a question. Expired questions are never returned, even before the cleanup has run, and the cleanup runs when the API starts and then every hour. Deleting a document also deletes the questions whose answers cite it, because an answer can quote its sources, and deleting a workspace deletes its questions. Question and answer text is never logged.
 
 ### Initial REST endpoints
 
@@ -398,7 +398,8 @@ classDiagram
 - `GET /api/v1/documents/{document_id}/file` — download the original file as an attachment, after authorization; responses are not cached.
 - `POST /api/v1/documents/{document_id}/retry` — queue a `failed` document to be indexed again, clearing its failure; returns `202`. A queued or processing document is returned unchanged; a `ready` one gets `409` (`document_already_indexed`), and one being deleted gets `409` (`document_being_deleted`).
 - `DELETE /api/v1/documents/{document_id}` — delete the document, its stored file, and its indexed chunks.
-- `POST /api/v1/workspaces/{workspace_id}/questions` — ask a question; returns answer, citations, and abstention flag.
+- `POST /api/v1/workspaces/{workspace_id}/questions` — ask a question; returns answer, citations, and abstention flag, and stores them for 3 days.
+- `GET /api/v1/workspaces/{workspace_id}/questions` — the caller's questions from the last 3 days, with their answers and citations, newest first.
 - `GET /health/live` and `/health/ready` — process and dependency readiness; do not leak credentials/configuration.
 
 Use consistent error JSON with a stable code, human-readable message, and request ID: `{"error": {"code": "...", "message": "...", "request_id": "...", "fields": [...]}}`, where `fields` lists invalid inputs and appears only for validation errors. Every response carries the same ID in an `X-Request-ID` header, so a user can quote it and it can be found in the logs. A workspace or document the caller cannot access returns `404`, the same as one that does not exist, so IDs reveal nothing. Never echo stack traces, provider credentials, or uploaded content in error responses.
@@ -426,8 +427,8 @@ Use consistent error JSON with a stable code, human-readable message, and reques
 - **Done when:** fixture documents produce expected text/pages/chunks; duplicate retry does not duplicate chunks; parser/provider errors result in `failed` status and recoverable logs.
 
 ### Phase 4 — Grounded question answering
-- Implement question embedding, workspace-scoped retrieval, relevance threshold, context budget, prompt builder with untrusted-source delimiting, provider adapter, citation validation, abstention, and answer UI.
-- **Done when:** integration tests confirm correct citations, no cross-workspace retrieval, and abstention on unsupported questions. Document model/provider limitations.
+- Implement question embedding, workspace-scoped retrieval, relevance threshold, context budget, prompt builder with untrusted-source delimiting, provider adapter, citation validation, abstention, answer UI, and a question history kept for 3 days (§9).
+- **Done when:** integration tests confirm correct citations, no cross-workspace retrieval, abstention on unsupported questions, and that stored questions expire after 3 days. Document model/provider limitations.
 
 ### Phase 5 — Evaluation and hardening
 - Create a small manually reviewed evaluation set with question, expected document/page, and expected answer facts. Measure retrieval hit rate/recall at k and citation correctness. Evaluate unsupported questions and prompt-injection-like content as robustness tests, not as proof of security.
@@ -458,7 +459,7 @@ Use consistent error JSON with a stable code, human-readable message, and reques
 - Use parameterized database access, migrations, dependency updates, secure cookies/token practices, CORS allowlists, and rate limits.
 - Delimit retrieved text as untrusted evidence in prompts; the model must not follow instructions found inside documents. This mitigates but does not eliminate prompt-injection risk; authorization and tool permissions must not depend on model compliance.
 - Validate citation identifiers against retrieved chunks; model-generated URLs/IDs are not trusted.
-- Define data retention and deletion. Make local data directories easy to clear; for a hosted demo, disclose provider data handling and retention before sending user content to third parties.
+- Define data retention and deletion. Questions, answers, and citations are deleted 3 days after the question was asked (§9); documents, their files, and their chunks are kept until the user deletes them. Make local data directories easy to clear; for a hosted demo, disclose provider data handling and retention before sending user content to third parties.
 - This project is not certified for regulated/clinical workloads. Use public or synthetic documents only.
 
 ## 13. Free/local development and cost controls
