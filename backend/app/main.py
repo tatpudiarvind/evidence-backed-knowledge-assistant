@@ -10,7 +10,13 @@ from app.api.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.database import create_database_engine, create_session_factory
 from app.core.errors import register_error_handlers
-from app.core.middleware import REQUEST_ID_HEADER, RequestIdMiddleware, UnhandledErrorMiddleware
+from app.core.middleware import (
+    REQUEST_ID_HEADER,
+    RequestBodyLimitMiddleware,
+    RequestIdMiddleware,
+    UnhandledErrorMiddleware,
+)
+from app.core.rate_limits import RateLimits
 from app.core.security import PasswordHashing
 from app.providers.embeddings import EmbeddingProvider, SentenceTransformerEmbeddings
 from app.providers.llm import LanguageModel, OllamaChatModel
@@ -63,10 +69,12 @@ def create_app(
     app.state.language_model = language_model
     app.state.ingestion_worker = worker
     app.state.question_cleanup = cleanup
+    app.state.rate_limits = RateLimits(settings)
 
     register_error_handlers(app)
-    # The last middleware added runs first: request ID, then CORS, then the error fallback.
-    # Errors are turned into JSON inside CORS, so browsers can read them.
+    # The last middleware added runs first: request ID, then CORS, then the error fallback, then
+    # the body size limit. Errors are turned into JSON inside CORS, so browsers can read them.
+    app.add_middleware(RequestBodyLimitMiddleware)
     app.add_middleware(UnhandledErrorMiddleware)
     app.add_middleware(
         CORSMiddleware,

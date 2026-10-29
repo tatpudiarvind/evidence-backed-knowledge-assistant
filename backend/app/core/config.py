@@ -34,10 +34,19 @@ class Settings(BaseSettings):
     # Set to true whenever the app is served over HTTPS.
     session_cookie_secure: bool = False
 
+    # Rate limits (Phase 5), counted in the API process's memory and reset when it restarts.
+    # Sign-in and registration attempts are counted per network address, questions per account.
+    rate_limits_enabled: bool = True
+    sign_in_attempts_per_minute: int = Field(default=10, ge=1, le=10_000)
+    registration_attempts_per_hour: int = Field(default=10, ge=1, le=10_000)
+    questions_per_minute: int = Field(default=10, ge=1, le=10_000)
+
     # Uploaded documents (D-33): files live under storage_dir, their metadata in PostgreSQL.
     storage_dir: Path = BACKEND_ROOT / "storage"
     max_upload_bytes: int = Field(default=10 * MEBIBYTE, ge=1, le=100 * MEBIBYTE)
     max_documents_per_workspace: int = Field(default=100, ge=1, le=10_000)
+    # How long an upload may take to arrive, so a stalled one can't hold its connection forever.
+    upload_timeout_seconds: int = Field(default=120, ge=1, le=3600)
 
     # Indexing (Phase 3). A background thread in the API process indexes queued documents;
     # turn it off to keep uploads queued, as the tests do.

@@ -50,7 +50,12 @@ async def upload_document(
 ) -> DocumentOut:
     # Membership is checked before the body is read.
     await run_in_threadpool(document_service.check_can_upload, session, user, workspace_id)
-    received = await receive_single_file(request, storage, settings.max_upload_bytes)
+    received = await receive_single_file(
+        request,
+        storage,
+        settings.max_upload_bytes,
+        timeout_seconds=settings.upload_timeout_seconds,
+    )
     try:
         document = await run_in_threadpool(
             document_service.store_upload, session, storage, settings, user, workspace_id, received

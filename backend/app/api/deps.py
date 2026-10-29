@@ -1,4 +1,5 @@
-"""Request dependencies: settings, database session, storage, models, and the signed-in user."""
+"""Request dependencies: settings, database session, storage, models, the signed-in user, and
+rate limits."""
 
 from collections.abc import Iterator
 from typing import Annotated
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.core.rate_limits import RateLimits, SlidingWindowLimiter, format_wait
 from app.core.security import PasswordHashing
 from app.db.models import User
 from app.providers.embeddings import EmbeddingProvider
@@ -94,3 +96,43 @@ def get_current_user(session: DbSession, token: SessionToken) -> User:
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def _enforce_rate_limit(limiter: SlidingWindowLimiter, key: str, message: str) -> None:
+    wait_seconds = limiter.acquire(key)
+    if wait_seconds is not None:
+        raise AppError(
+            429,
+            "rate_limited",
+            f"{message} Try again in {format_wait(wait_seconds)}.",
+            headers={"Retry-After": str(wait_seconds)},
+        )
+
+
+def _client_address(request: Request) -> str:
+    # The connection's address. uvicorn replaces it with a forwarded one only for proxies that
+    # its --forwarded-allow-ips option trusts.
+    return request.client.host if request.client else "unknown"
+
+
+async def limit_sign_in_attempts(request: Request) -> None:
+    limits: RateLimits = request.app.state.rate_limits
+    if limits.enabled:
+        _enforce_rate_limit(limits.sign_in, _client_address(request), "Too many sign-in attempts.")
+
+
+async def limit_registration_attempts(request: Request) -> None:
+    limits: RateLimits = request.app.state.rate_limits
+    if limits.enabled:
+        _enforce_rate_limit(
+            limits.registration, _client_address(request), "Too many registration attempts."
+        )
+
+
+async def limit_questions(request: Request, user: CurrentUser) -> None:
+    """Counts questions per account, so it runs after the sign-in check."""
+    limits: RateLimits = request.app.state.rate_limits
+    if limits.enabled:
+        _enforce_rate_limit(
+            limits.questions, str(user.id), "You've asked too many questions in the last minute."
+        )

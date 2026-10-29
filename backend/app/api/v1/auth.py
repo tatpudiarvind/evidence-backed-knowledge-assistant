@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Depends, Response
 
 from app.api.deps import (
     SESSION_COOKIE_NAME,
@@ -7,6 +7,8 @@ from app.api.deps import (
     PasswordsDep,
     SessionToken,
     SettingsDep,
+    limit_registration_attempts,
+    limit_sign_in_attempts,
 )
 from app.api.v1.schemas import LoginRequest, RegisterRequest, UserOut
 from app.core.config import Settings
@@ -33,7 +35,12 @@ def _user_out(signed_in: auth_service.SignedIn) -> UserOut:
     return UserOut(id=signed_in.user.id, email=signed_in.user.email)
 
 
-@router.post("/register", status_code=201, summary="Create an account and sign in")
+@router.post(
+    "/register",
+    status_code=201,
+    summary="Create an account and sign in",
+    dependencies=[Depends(limit_registration_attempts)],
+)
 def register(
     body: RegisterRequest,
     response: Response,
@@ -46,7 +53,7 @@ def register(
     return _user_out(signed_in)
 
 
-@router.post("/login", summary="Sign in")
+@router.post("/login", summary="Sign in", dependencies=[Depends(limit_sign_in_attempts)])
 def login(
     body: LoginRequest,
     response: Response,

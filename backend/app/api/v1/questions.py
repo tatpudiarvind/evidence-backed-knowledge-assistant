@@ -2,9 +2,16 @@
 
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-from app.api.deps import CurrentUser, DbSession, EmbeddingsDep, LanguageModelDep, SettingsDep
+from app.api.deps import (
+    CurrentUser,
+    DbSession,
+    EmbeddingsDep,
+    LanguageModelDep,
+    SettingsDep,
+    limit_questions,
+)
 from app.api.v1.schemas import (
     AnswerOut,
     CitationOut,
@@ -26,8 +33,11 @@ router = APIRouter(tags=["questions"])
         "Finds the passages in the workspace's indexed documents closest to the question. With "
         "a language model configured, the answer is written from those passages and cites them, "
         "or abstains when they don't answer the question; otherwise the passages are the "
-        "answer. A local model can take a minute or more. Questions are kept for three days."
+        "answer. A local model can take a minute or more. Questions are kept for three days. "
+        "Each account can ask a limited number of questions a minute; beyond that, the reply "
+        "is 429 with a Retry-After header."
     ),
+    dependencies=[Depends(limit_questions)],
 )
 def ask_question(
     workspace_id: uuid.UUID,

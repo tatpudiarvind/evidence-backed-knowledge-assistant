@@ -9,6 +9,7 @@ import hashlib
 from pathlib import Path
 from typing import BinaryIO
 
+import anyio
 from fastapi import Request
 from python_multipart.exceptions import FormParserError
 from python_multipart.multipart import MultipartParser, parse_options_header
@@ -118,9 +119,17 @@ class _SingleFileCollector:
 
 
 async def receive_single_file(
-    request: Request, storage: DocumentStorage, max_file_bytes: int
+    request: Request,
+    storage: DocumentStorage,
+    max_file_bytes: int,
+    *,
+    timeout_seconds: float,
 ) -> ReceivedFile:
-    """Save the request's one file to a temporary file. The caller must discard it when done."""
+    """Save the request's one file to a temporary file. The caller must discard it when done.
+
+    The body must arrive within `timeout_seconds`, so a stalled upload can't hold its
+    connection and temporary file forever.
+    """
     content_type, options = parse_options_header(request.headers.get("content-type"))
     boundary = options.get(b"boundary")
     if content_type.lower() != b"multipart/form-data" or not boundary:
@@ -136,8 +145,20 @@ async def receive_single_file(
 
     collector = _SingleFileCollector(storage, max_file_bytes)
     try:
-        await _read_body(request, collector, boundary, max_body_bytes, max_file_bytes)
+        # Unlike a plain asyncio timeout, this lets a chunk being written in a worker thread
+        # finish before the upload is cancelled, so the file is never removed mid-write.
+        with anyio.fail_after(timeout_seconds):
+            await _read_body(request, collector, boundary, max_body_bytes, max_file_bytes)
         return collector.result()
+    except TimeoutError:
+        collector.discard()
+        # The rest of the body may never arrive, so the connection is closed after the reply.
+        raise AppError(
+            408,
+            "upload_timed_out",
+            "The upload took too long. Try again.",
+            headers={"Connection": "close"},
+        ) from None
     except BaseException:
         collector.discard()
         raise

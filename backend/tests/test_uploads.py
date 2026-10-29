@@ -4,16 +4,19 @@ import hashlib
 from collections.abc import Iterator
 from pathlib import Path
 
+import anyio
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from starlette.types import Message
 
 from app.api.v1.uploads import MULTIPART_OVERHEAD_BYTES, receive_single_file
-from app.core.errors import register_error_handlers
+from app.core.errors import AppError, register_error_handlers
 from app.providers.storage import LocalDocumentStorage
 from tests.support import error_code
 
 MAX_FILE_BYTES = 1024
+UPLOAD_TIMEOUT_SECONDS = 30
 BOUNDARY = "test-boundary-7MA4YWxk"
 MULTIPART_HEADERS = {"Content-Type": f"multipart/form-data; boundary={BOUNDARY}"}
 
@@ -26,7 +29,9 @@ def client(tmp_path: Path) -> TestClient:
 
     @app.post("/upload")
     async def upload(request: Request) -> dict[str, object]:
-        received = await receive_single_file(request, storage, MAX_FILE_BYTES)
+        received = await receive_single_file(
+            request, storage, MAX_FILE_BYTES, timeout_seconds=UPLOAD_TIMEOUT_SECONDS
+        )
         try:
             return {
                 "filename": received.filename,
@@ -214,3 +219,42 @@ def test_rejects_too_many_parts(client, leftover_files) -> None:
 
     assert response.status_code == 422
     assert error_code(response) == "invalid_multipart"
+
+
+def test_gives_up_on_an_upload_that_stops_arriving(tmp_path, leftover_files) -> None:
+    # The test client sends whole bodies at once, so this calls the reader directly with a
+    # client that sends the start of a file and then nothing more.
+    storage = LocalDocumentStorage(tmp_path)
+    start = _raw_body(_file_part("slow.txt", "The start of a file, then nothing."), closed=False)
+    messages: list[Message] = [{"type": "http.request", "body": start, "more_body": True}]
+    files_while_waiting: list[Path] = []
+
+    async def receive() -> Message:
+        if messages:
+            return messages.pop(0)
+        files_while_waiting.extend((tmp_path / "tmp").iterdir())
+        await anyio.sleep_forever()
+        raise AssertionError("unreachable")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/upload",
+        "headers": [(b"content-type", MULTIPART_HEADERS["Content-Type"].encode())],
+    }
+
+    async def upload() -> None:
+        request = Request(scope, receive)
+        # A backstop, so the test fails rather than hangs if the reader stops timing out.
+        with anyio.fail_after(10):
+            await receive_single_file(request, storage, MAX_FILE_BYTES, timeout_seconds=0.5)
+
+    with pytest.raises(AppError) as raised:
+        anyio.run(upload)
+
+    assert raised.value.status_code == 408
+    assert raised.value.code == "upload_timed_out"
+    assert raised.value.headers == {"Connection": "close"}
+    # The partly written file existed while the reader waited; `leftover_files` checks that
+    # it was removed.
+    assert len(files_while_waiting) == 1

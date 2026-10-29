@@ -59,11 +59,21 @@ def test_explicit_cors_origins_are_accepted() -> None:
         {"retrieval_min_similarity": 1.01},
         {"answer_context_characters": 999},
         {"answer_context_characters": 50_001},
+        {"sign_in_attempts_per_minute": 0},
+        {"registration_attempts_per_hour": 0},
+        {"questions_per_minute": 0},
+        {"questions_per_minute": 10_001},
+        {"upload_timeout_seconds": 0},
+        {"upload_timeout_seconds": 3601},
     ],
 )
 def test_limits_must_stay_in_range(overrides: dict[str, float]) -> None:
     with pytest.raises(ValidationError):
         make_settings(**overrides)
+
+
+def test_rate_limits_are_on_by_default() -> None:
+    assert config.Settings.model_fields["rate_limits_enabled"].default is True
 
 
 def test_chunk_overlap_is_at_most_a_quarter_of_the_chunk_size() -> None:

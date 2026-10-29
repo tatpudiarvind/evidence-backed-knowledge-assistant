@@ -44,6 +44,8 @@ def make_settings(**overrides: Any) -> Settings:
         "llm_provider": "none",
         # Tests that need expired questions deleted call the cleanup themselves.
         "question_cleanup_enabled": False,
+        # Tests make many requests from one client; the rate limit tests turn the limits on.
+        "rate_limits_enabled": False,
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
