@@ -34,6 +34,8 @@ jobs:
       TEST_DATABASE_URL: postgresql+psycopg://knowledge_assistant:local_dev_only@localhost:5432/knowledge_assistant_test
       # Fail, rather than skip, the integration tests if the database is unreachable.
       TEST_DATABASE_REQUIRED: "1"
+      # Likewise fail, rather than skip, the real-model test if the model is missing.
+      TEST_MODEL_REQUIRED: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -49,6 +51,16 @@ jobs:
         run: uv run --no-sync ruff format --check .
       - name: Type check
         run: uv run --no-sync mypy app
+      - name: Download the embedding model
+        run: |
+          for attempt in 1 2 3; do
+            if uv run --no-sync python -m app.cli download-embedding-model; then
+              exit 0
+            fi
+            echo "Download attempt ${attempt} failed."
+            sleep 15
+          done
+          exit 1
       - name: Test
         run: uv run --no-sync pytest
 
@@ -89,6 +101,16 @@ jobs:
         run: docker compose up --build --detach --wait --wait-timeout 300
       - name: Apply migrations
         run: docker compose run --rm backend alembic upgrade head
+      - name: Download the embedding model
+        run: |
+          for attempt in 1 2 3; do
+            if docker compose run --rm backend python -m app.cli download-embedding-model; then
+              exit 0
+            fi
+            echo "Download attempt ${attempt} failed."
+            sleep 15
+          done
+          exit 1
       - name: Check the pgvector extension
         run: |
           version="$(echo "SELECT extversion FROM pg_extension WHERE extname = 'vector';" \
@@ -102,11 +124,16 @@ jobs:
           curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors http://localhost:8000/health/ready
           echo
           curl --fail --silent --show-error --retry 10 --retry-delay 3 --retry-all-errors --output /dev/null http://localhost:5173/
-      - name: Check sign-up, upload, download, and delete through the API
+      - name: Check sign-up, upload, indexing, download, and delete through the API
         run: |
           api=http://localhost:8000/api/v1
           jar="$(mktemp)"
-          printf 'Synthetic smoke-test text.\n' > /tmp/smoke.txt
+          count_chunks() {
+            echo "SELECT count(*) FROM document_chunks WHERE document_id = '$1';" \
+              | docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tA -v ON_ERROR_STOP=1'
+          }
+          printf 'Synthetic smoke-test text.\nProject records are kept for seven years, then deleted.\n' \
+            > /tmp/smoke.txt
           curl --fail --silent --show-error -c "$jar" \
             -H 'Content-Type: application/json' -H 'X-CSRF-Protection: 1' \
             -d '{"email":"smoke@example.com","password":"compose smoke test password"}' \
@@ -120,12 +147,27 @@ jobs:
           echo "$document"
           test "$(echo "$document" | jq -r .status)" = "queued"
           document_id="$(echo "$document" | jq -r .id)"
+          # The worker indexes the upload in the background; the first one also loads the model.
+          for attempt in $(seq 1 60); do
+            document="$(curl --fail --silent --show-error -b "$jar" "$api/documents/$document_id")"
+            status="$(echo "$document" | jq -r .status)"
+            if [ "$status" != "queued" ] && [ "$status" != "processing" ]; then
+              break
+            fi
+            sleep 2
+          done
+          echo "$document"
+          test "$status" = "ready"
+          chunks="$(count_chunks "$document_id")"
+          echo "chunks stored: ${chunks}"
+          test "$chunks" -gt 0
           curl --fail --silent --show-error -b "$jar" "$api/documents/$document_id/file" \
             | cmp - /tmp/smoke.txt
           curl --fail --silent --show-error -b "$jar" -H 'X-CSRF-Protection: 1' \
             -X DELETE "$api/documents/$document_id"
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' -b "$jar" \
             "$api/documents/$document_id")" = "404"
+          test "$(count_chunks "$document_id")" = "0"
       - name: Check readiness reports 503 when the database stops
         run: |
           docker compose stop db

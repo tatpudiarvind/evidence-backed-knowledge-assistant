@@ -27,14 +27,19 @@ const WORKSPACE: Workspace = {
 const LIST = "GET /api/v1/workspaces/ws-1/documents";
 const UPLOAD = "POST /api/v1/workspaces/ws-1/documents";
 const DELETE = "DELETE /api/v1/documents/doc-1";
+const RETRY = "POST /api/v1/documents/doc-1/retry";
 const UNSUPPORTED = "Only PDF, Word (.docx), and plain-text (.txt) files can be uploaded.";
+const NO_TEXT = "No readable text was found.";
+/** Short enough that status-check tests don't wait long, long enough to stay cheap. */
+const QUICK_REFRESH_MS = 20;
 
-function renderLibrary(onSessionExpired = vi.fn()) {
+function renderLibrary(onSessionExpired = vi.fn(), refreshIntervalMs?: number) {
   render(
     <DocumentLibrary
       workspace={WORKSPACE}
       focusHeading={false}
       onSessionExpired={onSessionExpired}
+      refreshIntervalMs={refreshIntervalMs}
     />,
   );
   return onSessionExpired;
@@ -78,6 +83,21 @@ function uploadRoute(uploaded: string[]) {
 
 function chooseFiles(files: File[]) {
   fireEvent.change(screen.getByLabelText("Choose files"), { target: { files } });
+}
+
+function listOf(...items: Record<string, unknown>[]): Response {
+  return jsonResponse({ items: items.map((item) => documentJson(item)) });
+}
+
+const FAILED_SCAN = {
+  display_name: "scan.pdf",
+  status: "failed",
+  failure_code: "no_text_found",
+  failure_message: NO_TEXT,
+};
+
+function pause(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 beforeEach(() => {
@@ -302,6 +322,152 @@ describe("DocumentLibrary", () => {
     await screen.findByText("This workspace is empty");
 
     chooseFiles([new File(["hello"], "notes.txt", { type: "text/plain" })]);
+
+    await waitFor(() => expect(onSessionExpired).toHaveBeenCalledTimes(1));
+  });
+
+  it("checks indexing documents until they finish and announces the outcome", async () => {
+    const manual = { id: "doc-2", display_name: "manual.pdf", status: "ready" };
+    const { calls, routes } = installFetch({ [LIST]: listOf({}, manual) });
+    renderLibrary(vi.fn(), QUICK_REFRESH_MS);
+    await screen.findByRole("list");
+    const row = rowFor("guide.pdf");
+    expect(within(row).getByText("Queued")).toBeInTheDocument();
+
+    routes[LIST] = listOf({ status: "processing" }, manual);
+    expect(await within(row).findByText("Processing")).toBeInTheDocument();
+
+    routes[LIST] = listOf({ status: "ready" }, manual);
+    expect(await screen.findByText("guide.pdf is ready.")).toBeInTheDocument();
+    expect(within(row).getByText("Ready")).toBeInTheDocument();
+
+    // Nothing is being indexed any more, so the checks stop.
+    const checks = callsTo(calls, LIST).length;
+    await pause(QUICK_REFRESH_MS * 5);
+    expect(callsTo(calls, LIST)).toHaveLength(checks);
+  });
+
+  it("announces a document that couldn't be indexed and indexes it again on request", async () => {
+    const { calls, routes } = installFetch({
+      [LIST]: listOf({ display_name: "scan.pdf", status: "processing" }),
+      [RETRY]: jsonResponse(documentJson({ display_name: "scan.pdf" }), 202),
+    });
+    renderLibrary(vi.fn(), QUICK_REFRESH_MS);
+    await screen.findByRole("list");
+    const row = rowFor("scan.pdf");
+
+    routes[LIST] = listOf(FAILED_SCAN);
+    expect(await screen.findByText("scan.pdf couldn't be indexed.")).toBeInTheDocument();
+    expect(within(row).getByText("Failed")).toBeInTheDocument();
+    expect(within(row).getByText(NO_TEXT)).toBeInTheDocument();
+
+    routes[LIST] = listOf({ display_name: "scan.pdf", status: "ready" });
+    fireEvent.click(within(row).getByRole("button", { name: "Retry scan.pdf" }));
+
+    expect(await screen.findByText("Queued scan.pdf to be indexed again.")).toBeInTheDocument();
+    expect(within(row).getByText("Queued")).toBeInTheDocument();
+    expect(within(row).queryByText(NO_TEXT)).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "Retry scan.pdf" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download scan.pdf" })).toHaveFocus();
+    expect(callsTo(calls, RETRY)[0]?.init.headers).toMatchObject({ "X-CSRF-Protection": "1" });
+
+    expect(await screen.findByText("scan.pdf is ready.")).toBeInTheDocument();
+    expect(within(row).getByText("Ready")).toBeInTheDocument();
+  });
+
+  it("ignores a status check that was sent before a change made here", async () => {
+    const uploaded: string[] = [];
+    let answerCheck: (response: Response) => void = () => undefined;
+    const pendingCheck = new Promise<Response>((resolve) => {
+      answerCheck = resolve;
+    });
+    let checks = 0;
+    const { calls, routes } = installFetch({
+      [LIST]: () => (++checks === 1 ? listOf({}) : pendingCheck),
+      [UPLOAD]: uploadRoute(uploaded),
+    });
+    renderLibrary(vi.fn(), QUICK_REFRESH_MS);
+    await waitFor(() => expect(callsTo(calls, LIST)).toHaveLength(2));
+
+    chooseFiles([new File(["hello"], "notes.txt", { type: "text/plain" })]);
+    expect(await screen.findByRole("button", { name: "Download notes.txt" })).toBeInTheDocument();
+
+    // The pending check was sent before the upload, so its list lacks notes.txt.
+    routes[LIST] = apiErrorResponse(503, "database_unavailable", "The database isn't available.");
+    answerCheck(listOf({ status: "ready" }));
+    // A later check starts only once the one before it has finished.
+    await waitFor(() => expect(callsTo(calls, LIST).length).toBeGreaterThan(3));
+
+    expect(screen.getByRole("button", { name: "Download notes.txt" })).toBeInTheDocument();
+    expect(within(rowFor("guide.pdf")).getByText("Queued")).toBeInTheDocument();
+    expect(screen.getByText("2 documents")).toBeInTheDocument();
+    // Failed checks leave the list as it was, without an error.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    routes[LIST] = listOf(
+      { id: "doc-notes.txt", display_name: "notes.txt", mime_type: "text/plain" },
+      { status: "ready" },
+    );
+    expect(await screen.findByText("guide.pdf is ready.")).toBeInTheDocument();
+    expect(screen.getByText("2 documents")).toBeInTheDocument();
+  });
+
+  it("reports an ended session from a status check", async () => {
+    let checks = 0;
+    installFetch({ [LIST]: () => (++checks === 1 ? listOf({}) : unauthenticatedResponse()) });
+
+    const onSessionExpired = renderLibrary(vi.fn(), QUICK_REFRESH_MS);
+
+    await waitFor(() => expect(onSessionExpired).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows a retried document as ready when it was indexed after all", async () => {
+    installFetch({
+      [LIST]: listOf(FAILED_SCAN),
+      [RETRY]: apiErrorResponse(409, "document_already_indexed", "This document is already indexed."),
+    });
+    renderLibrary();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry scan.pdf" }));
+
+    expect(await screen.findByText("scan.pdf is ready.")).toBeInTheDocument();
+    expect(within(rowFor("scan.pdf")).getByText("Ready")).toBeInTheDocument();
+    expect(screen.queryByText(NO_TEXT)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download scan.pdf" })).toHaveFocus();
+  });
+
+  it.each([
+    {
+      reason: "the document is being deleted",
+      response: apiErrorResponse(409, "document_being_deleted", "This document is being deleted."),
+      message: "This document is being deleted.",
+      status: "Deleting",
+      focused: "Delete scan.pdf",
+    },
+    {
+      reason: "the database is unavailable",
+      response: apiErrorResponse(503, "database_unavailable", "The database isn't available."),
+      message: "The database isn't available.",
+      status: "Failed",
+      focused: "Retry scan.pdf",
+    },
+  ])("explains a retry that fails because $reason", async (example) => {
+    installFetch({ [LIST]: listOf(FAILED_SCAN), [RETRY]: example.response });
+    renderLibrary();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry scan.pdf" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(example.message);
+    expect(within(rowFor("scan.pdf")).getByText(example.status)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: example.focused })).toHaveFocus();
+  });
+
+  it("reports an ended session from a retry", async () => {
+    installFetch({ [LIST]: listOf(FAILED_SCAN), [RETRY]: unauthenticatedResponse() });
+    const onSessionExpired = renderLibrary();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry scan.pdf" }));
 
     await waitFor(() => expect(onSessionExpired).toHaveBeenCalledTimes(1));
   });

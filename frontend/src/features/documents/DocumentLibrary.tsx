@@ -12,6 +12,7 @@ import { isUnauthenticated } from "../../api/client";
 import {
   ACCEPTED_FILE_TYPES,
   type DocumentRecord,
+  isIndexing,
   listDocuments,
   uploadDocument,
 } from "../../api/documents";
@@ -30,7 +31,11 @@ type DocumentLibraryProps = {
   /** Move focus to the workspace heading when the library first appears. */
   focusHeading: boolean;
   onSessionExpired: () => void;
+  /** How long to wait between status checks while documents are being indexed. */
+  refreshIntervalMs?: number;
 };
+
+const REFRESH_INTERVAL_MS = 2500;
 
 let nextUploadId = 1;
 
@@ -45,10 +50,27 @@ function carriesFiles(dataTransfer: DataTransfer | null): boolean {
   return dataTransfer !== null && Array.from(dataTransfer.types).includes("Files");
 }
 
+/** Describes the documents that finished indexing between two versions of the list. */
+function indexingOutcome(before: DocumentRecord[], after: DocumentRecord[]): string {
+  const wasIndexing = new Set(
+    before.filter((item) => isIndexing(item.status)).map((item) => item.id),
+  );
+  return after
+    .filter((item) => wasIndexing.has(item.id))
+    .flatMap((item) => {
+      if (item.status === "ready") {
+        return [`${item.displayName} is ready.`];
+      }
+      return item.status === "failed" ? [`${item.displayName} couldn't be indexed.`] : [];
+    })
+    .join(" ");
+}
+
 export default function DocumentLibrary({
   workspace,
   focusHeading,
   onSessionExpired,
+  refreshIntervalMs = REFRESH_INTERVAL_MS,
 }: DocumentLibraryProps) {
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [attempt, setAttempt] = useState(0);
@@ -60,6 +82,9 @@ export default function DocumentLibrary({
   const listHeadingRef = useRef<HTMLHeadingElement>(null);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   const abortRef = useRef<AbortController | null>(null);
+  // Counts changes made here, so a refresh that was sent before one can be ignored.
+  const changesRef = useRef(0);
+  const documentsRef = useRef<DocumentRecord[]>([]);
   const workspaceId = workspace.id;
 
   useEffect(() => {
@@ -92,6 +117,55 @@ export default function DocumentLibrary({
     return () => controller.abort();
   }, [workspaceId, attempt, onSessionExpired]);
 
+  const loadedDocuments = load.state === "loaded" ? load.documents : null;
+  const indexing = loadedDocuments?.some((item) => isIndexing(item.status)) ?? false;
+
+  useEffect(() => {
+    documentsRef.current = loadedDocuments ?? [];
+  }, [loadedDocuments]);
+
+  // While documents are being indexed, check their status again every few seconds.
+  useEffect(() => {
+    if (!indexing) {
+      return;
+    }
+    const controller = new AbortController();
+    let timer = 0;
+
+    async function refresh() {
+      const changes = changesRef.current;
+      try {
+        const documents = await listDocuments(workspaceId, controller.signal);
+        // A list sent before an upload, retry, or delete here would undo that change.
+        if (!controller.signal.aborted && changesRef.current === changes) {
+          const outcome = indexingOutcome(documentsRef.current, documents);
+          setLoad({ state: "loaded", documents });
+          if (outcome !== "") {
+            setAnnouncement(outcome);
+          }
+        }
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        if (isUnauthenticated(error)) {
+          onSessionExpired();
+          return;
+        }
+        // Otherwise the last list stays up, and the next check tries again.
+      }
+      if (!controller.signal.aborted) {
+        timer = window.setTimeout(refresh, refreshIntervalMs);
+      }
+    }
+
+    timer = window.setTimeout(refresh, refreshIntervalMs);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [indexing, workspaceId, onSessionExpired, refreshIntervalMs]);
+
   // A file dropped outside the drop zone would otherwise replace the app.
   useEffect(() => {
     function blockFileDrop(event: DragEvent) {
@@ -122,9 +196,14 @@ export default function DocumentLibrary({
     try {
       const record = await uploadDocument(workspaceId, item.file, signal);
       updateUpload(item.id, { state: "done" });
+      changesRef.current += 1;
+      // A status check that finished first may already list the new document.
       setLoad((current) =>
         current.state === "loaded"
-          ? { state: "loaded", documents: [record, ...current.documents] }
+          ? {
+              state: "loaded",
+              documents: [record, ...current.documents.filter((other) => other.id !== record.id)],
+            }
           : current,
       );
     } catch (error) {
@@ -189,6 +268,7 @@ export default function DocumentLibrary({
   }
 
   const handleDeleted = useCallback((record: DocumentRecord) => {
+    changesRef.current += 1;
     setLoad((current) =>
       current.state === "loaded"
         ? { state: "loaded", documents: current.documents.filter((item) => item.id !== record.id) }
@@ -198,7 +278,8 @@ export default function DocumentLibrary({
     listHeadingRef.current?.focus();
   }, []);
 
-  const handleChanged = useCallback((record: DocumentRecord) => {
+  const handleChanged = useCallback((record: DocumentRecord, announcement?: string) => {
+    changesRef.current += 1;
     setLoad((current) =>
       current.state === "loaded"
         ? {
@@ -207,6 +288,9 @@ export default function DocumentLibrary({
           }
         : current,
     );
+    if (announcement !== undefined) {
+      setAnnouncement(announcement);
+    }
   }, []);
 
   function retry() {
@@ -262,7 +346,7 @@ export default function DocumentLibrary({
           Documents
         </h2>
         <p className="section-note">
-          Indexing isn't available yet, so new documents stay queued for now.
+          New documents are indexed in the background, and their status here updates on its own.
         </p>
         {load.state === "loading" && (
           <>

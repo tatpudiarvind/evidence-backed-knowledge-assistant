@@ -12,6 +12,11 @@ export const DOCUMENT_STATUSES = ["queued", "processing", "ready", "failed", "de
 
 export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number];
 
+/** Queued and processing documents change status on their own as the API indexes them. */
+export function isIndexing(status: DocumentStatus): boolean {
+  return status === "queued" || status === "processing";
+}
+
 /** The file types the API accepts, for a file input's accept attribute. */
 export const ACCEPTED_FILE_TYPES = ".pdf,.docx,.txt";
 
@@ -94,6 +99,11 @@ export async function uploadDocument(
 
 export function downloadDocument(documentId: string, signal?: AbortSignal): Promise<Blob> {
   return requestBlob(`${documentPath(documentId)}/file`, { signal });
+}
+
+/** Queues a document whose indexing failed. A queued or processing one comes back unchanged. */
+export function retryDocument(documentId: string): Promise<DocumentRecord> {
+  return requestJson(`${documentPath(documentId)}/retry`, parseDocument, { method: "POST" });
 }
 
 export function deleteDocument(documentId: string): Promise<void> {

@@ -1,7 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Self
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,28 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(default=10 * MEBIBYTE, ge=1, le=100 * MEBIBYTE)
     max_documents_per_workspace: int = Field(default=100, ge=1, le=10_000)
 
+    # Indexing (Phase 3). A background thread in the API process indexes queued documents;
+    # turn it off to keep uploads queued, as the tests do.
+    ingestion_worker_enabled: bool = True
+    chunk_size_characters: int = Field(default=1000, ge=200, le=4000)
+    chunk_overlap_characters: int = Field(default=150, ge=0)
+    max_document_pages: int = Field(default=500, ge=1, le=10_000)
+    max_document_characters: int = Field(default=2_000_000, ge=1_000, le=50_000_000)
+    # Checked between pages and paragraphs, so a single slow page can run past it.
+    parse_timeout_seconds: int = Field(default=120, ge=1, le=3600)
+
+    # The local embedding model (D-34). Download it once with
+    # `python -m app.cli download-embedding-model`; indexing itself never downloads anything.
+    embedding_model_name: str = "BAAI/bge-small-en-v1.5"
+    # A Hugging Face commit, so every machine runs exactly the same model files.
+    embedding_model_revision: str = Field(
+        default="5c38ec7c405ec4b44b94cc5a9bb96e735b38267a", pattern=r"^[0-9a-f]{40}$"
+    )
+    embedding_model_dir: Path = BACKEND_ROOT / "models"
+    embedding_batch_size: int = Field(default=32, ge=1, le=512)
+    # The model card's instruction for short search queries; documents get no prefix.
+    embedding_query_prefix: str = "Represent this sentence for searching relevant passages: "
+
     model_config = SettingsConfigDict(
         env_file=REPOSITORY_ROOT / ".env",
         env_file_encoding="utf-8",
@@ -46,6 +69,15 @@ class Settings(BaseSettings):
             if not origin.startswith(("http://", "https://")) or "*" in origin:
                 raise ValueError("CORS origins must be explicit http:// or https:// origins")
         return origins
+
+    @model_validator(mode="after")
+    def _check_chunk_overlap(self) -> Self:
+        # Each chunk must start well after the previous one, or indexing would barely advance.
+        if self.chunk_overlap_characters * 4 > self.chunk_size_characters:
+            raise ValueError(
+                "CHUNK_OVERLAP_CHARACTERS must be at most a quarter of CHUNK_SIZE_CHARACTERS"
+            )
+        return self
 
 
 @lru_cache

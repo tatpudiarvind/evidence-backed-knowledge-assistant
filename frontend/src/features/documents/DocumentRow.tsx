@@ -6,6 +6,7 @@ import {
   type DocumentStatus,
   deleteDocument,
   downloadDocument,
+  retryDocument,
 } from "../../api/documents";
 import ErrorNotice from "../../components/ErrorNotice";
 import { fileTypeLabel, formatDateTime, formatFileSize } from "./format";
@@ -27,12 +28,16 @@ const STATUS_TONES: Record<DocumentStatus, string> = {
   deleting: "neutral",
 };
 
-type Activity = "idle" | "downloading" | "confirming" | "deleting";
+type Activity = "idle" | "downloading" | "retrying" | "confirming" | "deleting";
+
+/** The button that gets focus back once an action finishes, because its own may be gone. */
+type FocusTarget = "retry" | "download" | "delete";
 
 type DocumentRowProps = {
   record: DocumentRecord;
   onDeleted: (record: DocumentRecord) => void;
-  onChanged: (record: DocumentRecord) => void;
+  /** Reports a changed record, with an optional message for screen readers. */
+  onChanged: (record: DocumentRecord, announcement?: string) => void;
   onSessionExpired: () => void;
 };
 
@@ -44,16 +49,23 @@ export default function DocumentRow({
 }: DocumentRowProps) {
   const [activity, setActivity] = useState<Activity>("idle");
   const [error, setError] = useState<unknown>(null);
+  const retryButtonRef = useRef<HTMLButtonElement>(null);
+  const downloadButtonRef = useRef<HTMLButtonElement>(null);
   const deleteButtonRef = useRef<HTMLButtonElement>(null);
   const keepButtonRef = useRef<HTMLButtonElement>(null);
-  const returnFocusRef = useRef(false);
+  const focusAfterRef = useRef<FocusTarget | null>(null);
 
   useEffect(() => {
     if (activity === "confirming") {
       keepButtonRef.current?.focus();
-    } else if (activity === "idle" && returnFocusRef.current) {
-      returnFocusRef.current = false;
-      deleteButtonRef.current?.focus();
+    } else if (activity === "idle" && focusAfterRef.current !== null) {
+      const target = {
+        retry: retryButtonRef,
+        download: downloadButtonRef,
+        delete: deleteButtonRef,
+      }[focusAfterRef.current];
+      focusAfterRef.current = null;
+      target.current?.focus();
     }
   }, [activity]);
 
@@ -73,13 +85,44 @@ export default function DocumentRow({
     }
   }
 
+  async function handleRetry() {
+    setActivity("retrying");
+    setError(null);
+    try {
+      const queued = await retryDocument(record.id);
+      focusAfterRef.current = "download";
+      onChanged(queued, `Queued ${record.displayName} to be indexed again.`);
+    } catch (caught) {
+      if (isUnauthenticated(caught)) {
+        onSessionExpired();
+        return;
+      }
+      const code = caught instanceof ApiError ? caught.code : null;
+      if (code === "document_already_indexed") {
+        // Indexed after all, perhaps retried from another tab.
+        focusAfterRef.current = "download";
+        onChanged(
+          { ...record, status: "ready", failureCode: null, failureMessage: null },
+          `${record.displayName} is ready.`,
+        );
+      } else {
+        if (code === "document_being_deleted") {
+          onChanged({ ...record, status: "deleting" });
+        }
+        focusAfterRef.current = code === "document_being_deleted" ? "delete" : "retry";
+        setError(caught);
+      }
+    }
+    setActivity("idle");
+  }
+
   function askToDelete() {
     setError(null);
     setActivity("confirming");
   }
 
   function keepDocument() {
-    returnFocusRef.current = true;
+    focusAfterRef.current = "delete";
     setActivity("idle");
   }
 
@@ -109,7 +152,7 @@ export default function DocumentRow({
         onChanged({ ...record, status: "deleting" });
       }
       setError(caught);
-      returnFocusRef.current = true;
+      focusAfterRef.current = "delete";
       setActivity("idle");
     }
   }
@@ -170,11 +213,28 @@ export default function DocumentRow({
           </div>
         ) : (
           <>
+            {record.status === "failed" && (
+              <button
+                ref={retryButtonRef}
+                type="button"
+                className="button button-secondary button-small"
+                onClick={handleRetry}
+                disabled={activity !== "idle"}
+              >
+                {activity === "retrying" ? "Retrying…" : "Retry"}
+                {hiddenName}
+              </button>
+            )}
             <button
+              ref={downloadButtonRef}
               type="button"
               className="button button-secondary button-small"
               onClick={handleDownload}
-              disabled={activity === "downloading" || record.status === "deleting"}
+              disabled={
+                activity === "downloading" ||
+                activity === "retrying" ||
+                record.status === "deleting"
+              }
             >
               {activity === "downloading" ? "Downloading…" : "Download"}
               {hiddenName}
@@ -184,7 +244,7 @@ export default function DocumentRow({
               type="button"
               className="button button-quiet button-small"
               onClick={askToDelete}
-              disabled={activity === "downloading"}
+              disabled={activity === "downloading" || activity === "retrying"}
             >
               Delete
               {hiddenName}

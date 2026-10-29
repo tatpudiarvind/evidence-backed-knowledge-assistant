@@ -23,6 +23,7 @@ coverage/
 # Local application data
 data/
 storage/
+/backend/models/
 
 # Editors and operating systems
 .vscode/

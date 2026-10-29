@@ -1,14 +1,17 @@
 """Phase 2's definition of done (P2-05, P2-12): one user can never reach another's documents.
 
-Every denial looks the same as "not found", so IDs can't be probed for existence.
+Phase 3's retry endpoint (P3-08) is held to the same rule. Every denial looks the same as
+"not found", so IDs can't be probed for existence.
 """
 
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db.models import Document
 from tests.support import (
     CSRF_HEADERS,
     create_workspace,
@@ -97,6 +100,22 @@ def test_cannot_upload_into_another_users_workspace(users: TwoUsers, storage_dir
     _owner_still_has_the_document(users, storage_dir)
 
 
+def test_cannot_retry_another_users_document(db_app, users: TwoUsers) -> None:
+    with db_app.state.session_factory() as session:
+        document = session.get(Document, uuid.UUID(users.document_id))
+        document.status = "failed"
+        document.failure_code = "no_text_found"
+        session.commit()
+
+    url = f"/api/v1/documents/{users.document_id}/retry"
+    response = users.intruder.post(url, headers=CSRF_HEADERS)
+
+    assert response.status_code == 404
+    assert error_code(response) == "document_not_found"
+    owner_view = users.owner.get(f"/api/v1/documents/{users.document_id}").json()
+    assert (owner_view["status"], owner_view["failure_code"]) == ("failed", "no_text_found")
+
+
 @pytest.mark.parametrize(
     ("method", "path"),
     [
@@ -105,6 +124,7 @@ def test_cannot_upload_into_another_users_workspace(users: TwoUsers, storage_dir
         ("GET", "/api/v1/workspaces/{workspace_id}/documents"),
         ("GET", "/api/v1/documents/{document_id}"),
         ("GET", "/api/v1/documents/{document_id}/file"),
+        ("POST", "/api/v1/documents/{document_id}/retry"),
         ("DELETE", "/api/v1/documents/{document_id}"),
     ],
 )

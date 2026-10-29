@@ -34,6 +34,13 @@ services:
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10485760}
       MAX_DOCUMENTS_PER_WORKSPACE: ${MAX_DOCUMENTS_PER_WORKSPACE:-100}
+      INGESTION_WORKER_ENABLED: ${INGESTION_WORKER_ENABLED:-true}
+      CHUNK_SIZE_CHARACTERS: ${CHUNK_SIZE_CHARACTERS:-1000}
+      CHUNK_OVERLAP_CHARACTERS: ${CHUNK_OVERLAP_CHARACTERS:-150}
+      MAX_DOCUMENT_PAGES: ${MAX_DOCUMENT_PAGES:-500}
+      MAX_DOCUMENT_CHARACTERS: ${MAX_DOCUMENT_CHARACTERS:-2000000}
+      PARSE_TIMEOUT_SECONDS: ${PARSE_TIMEOUT_SECONDS:-120}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
@@ -42,6 +49,9 @@ services:
       - ./backend/alembic.ini:/app/alembic.ini
       # Uploaded files (STORAGE_DIR defaults to /app/storage in the image).
       - document_storage:/app/storage
+      # The embedding model (EMBEDDING_MODEL_DIR defaults to /app/models in the image). Fetch
+      # it once with `docker compose run --rm backend python -m app.cli download-embedding-model`.
+      - embedding_models:/app/models
     depends_on:
       db:
         condition: service_healthy
@@ -74,4 +84,5 @@ services:
 volumes:
   postgres_data:
   document_storage:
+  embedding_models:
   frontend_node_modules:

@@ -1,4 +1,4 @@
-"""Document lifecycle: upload, list, read, download, and delete (D-33, spec section 6.3)."""
+"""Document lifecycle: upload, list, read, download, retry indexing, and delete (D-33)."""
 
 import logging
 import uuid
@@ -83,7 +83,7 @@ def store_upload(
             mime_type=file_type.mime_type,
             size_bytes=received.size_bytes,
             sha256=received.sha256,
-            # Indexing (Phase 3) picks up queued documents.
+            # The ingestion worker indexes queued documents in upload order.
             status=DocumentStatus.QUEUED.value,
         )
         document_repository.add(session, document)
@@ -109,6 +109,24 @@ def open_document_file(
             404, "document_file_missing", "The stored file for this document is missing."
         ) from None
     return document, handle
+
+
+def retry_document(session: Session, user: User, document_id: uuid.UUID) -> Document:
+    """Queue a document whose indexing failed. Queued or processing documents stay as they are."""
+    document = document_repository.get_for_member(session, document_id, user.id, lock=True)
+    if document is None:
+        raise _document_not_found()
+    if document.status == DocumentStatus.DELETING:
+        raise _being_deleted()
+    if document.status == DocumentStatus.READY:
+        raise AppError(409, "document_already_indexed", "This document is already indexed.")
+    if document.status == DocumentStatus.FAILED:
+        document.status = DocumentStatus.QUEUED.value
+        document.failure_code = None
+        document.failure_message = None
+    # Saves the change, if any, and releases the row lock.
+    session.commit()
+    return document
 
 
 def delete_document(

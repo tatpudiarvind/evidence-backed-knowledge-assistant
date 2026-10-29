@@ -1,4 +1,4 @@
-"""The document lifecycle (P2-06 - P2-08) against the PostgreSQL test database."""
+"""The document lifecycle (P2-06 - P2-08) and the retry action (P3-08) against PostgreSQL."""
 
 import hashlib
 import re
@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db.models import Document
 from app.repositories import documents as document_repository
 from tests.support import (
     CSRF_HEADERS,
@@ -53,6 +54,7 @@ def _documents(client: TestClient, workspace_id: str) -> list[dict[str, Any]]:
         ("paper.pdf", pdf_bytes(), PDF_MIME),
         ("report.docx", docx_bytes(), DOCX_MIME),
     ],
+    ids=["txt", "pdf", "docx"],
 )
 def test_upload_stores_the_file_and_queues_it(
     owner, workspace_id, storage_dir: Path, filename: str, content: bytes, mime_type: str
@@ -143,6 +145,7 @@ def test_delete_removes_the_document_and_its_file(owner, workspace_id, storage_d
         ("binary.txt", b"\x00\x01\x02\x03", 422, "invalid_file_content"),
         ("empty.txt", b"", 422, "file_empty"),
     ],
+    ids=["exe", "doc", "no-extension", "fake-pdf", "pdf-as-docx", "latin-1", "binary", "empty"],
 )
 def test_invalid_uploads_are_rejected_and_nothing_is_kept(
     owner, workspace_id, storage_dir, filename: str, content: bytes, status: int, code: str
@@ -274,3 +277,99 @@ def test_download_reports_a_missing_stored_file(owner, workspace_id, storage_dir
 
     assert response.status_code == 404
     assert error_code(response) == "document_file_missing"
+
+
+@pytest.fixture
+def wake_ups(db_app, monkeypatch) -> list[str]:
+    """Records each time a request wakes the indexing worker."""
+    calls: list[str] = []
+    monkeypatch.setattr(db_app.state.ingestion_worker, "notify", lambda: calls.append("notify"))
+    return calls
+
+
+def _set_status(db_app, document_id: str, status: str, failure_code: str | None = None) -> None:
+    with db_app.state.session_factory() as session:
+        document = session.get(Document, uuid.UUID(document_id))
+        document.status = status
+        document.failure_code = failure_code
+        document.failure_message = "Synthetic failure message." if failure_code else None
+        session.commit()
+
+
+def _retry(client: TestClient, document_id: str, headers: dict[str, str] = CSRF_HEADERS) -> Any:
+    return client.post(f"/api/v1/documents/{document_id}/retry", headers=headers)
+
+
+def test_uploads_wake_the_indexing_worker(owner, workspace_id, wake_ups) -> None:
+    assert upload(owner, workspace_id, "notes.txt", b"text").status_code == 202
+    assert upload(owner, workspace_id, "program.exe", b"MZ\x90\x00").status_code == 415
+
+    assert wake_ups == ["notify"]
+
+
+def test_retry_queues_a_failed_document_again(db_app, owner, workspace_id, wake_ups) -> None:
+    document_id = upload(owner, workspace_id, "notes.txt", b"text").json()["id"]
+    _set_status(db_app, document_id, "failed", "embedding_unavailable")
+    wake_ups.clear()
+
+    response = _retry(owner, document_id)
+
+    assert response.status_code == 202
+    retried = response.json()
+    assert (retried["status"], retried["failure_code"], retried["failure_message"]) == (
+        "queued",
+        None,
+        None,
+    )
+    assert owner.get(f"/api/v1/documents/{document_id}").json() == retried
+    assert wake_ups == ["notify"]
+
+
+@pytest.mark.parametrize("status", ["queued", "processing"])
+def test_retry_leaves_waiting_documents_as_they_are(
+    db_app, owner, workspace_id, status: str
+) -> None:
+    document_id = upload(owner, workspace_id, "notes.txt", b"text").json()["id"]
+    _set_status(db_app, document_id, status)
+
+    response = _retry(owner, document_id)
+
+    assert response.status_code == 202
+    assert response.json()["status"] == status
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [("ready", "document_already_indexed"), ("deleting", "document_being_deleted")],
+)
+def test_retry_refuses_indexed_and_deleting_documents(
+    db_app, owner, workspace_id, wake_ups, status: str, code: str
+) -> None:
+    document_id = upload(owner, workspace_id, "notes.txt", b"text").json()["id"]
+    _set_status(db_app, document_id, status)
+    wake_ups.clear()
+
+    response = _retry(owner, document_id)
+
+    assert response.status_code == 409
+    assert error_code(response) == code
+    assert owner.get(f"/api/v1/documents/{document_id}").json()["status"] == status
+    assert wake_ups == []
+
+
+def test_retry_needs_the_csrf_header(db_app, owner, workspace_id) -> None:
+    document_id = upload(owner, workspace_id, "notes.txt", b"text").json()["id"]
+    _set_status(db_app, document_id, "failed", "no_text_found")
+
+    response = _retry(owner, document_id, headers={})
+
+    assert response.status_code == 403
+    assert error_code(response) == "csrf_header_missing"
+    assert owner.get(f"/api/v1/documents/{document_id}").json()["status"] == "failed"
+
+
+def test_retry_of_an_unknown_document_is_not_found(owner) -> None:
+    response = _retry(owner, str(uuid.uuid4()))
+
+    assert response.status_code == 404
+    assert error_code(response) == "document_not_found"

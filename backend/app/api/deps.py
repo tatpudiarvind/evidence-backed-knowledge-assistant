@@ -1,4 +1,4 @@
-"""Request dependencies: settings, database session, storage, and the signed-in user."""
+"""Request dependencies: settings, database session, storage, indexing, and the signed-in user."""
 
 from collections.abc import Iterator
 from typing import Annotated
@@ -13,6 +13,7 @@ from app.core.security import PasswordHashing
 from app.db.models import User
 from app.providers.storage import DocumentStorage
 from app.services import auth as auth_service
+from app.workers.ingestion import IngestionWorker
 
 SESSION_COOKIE_NAME = "eka_session"
 # Browsers only send custom headers cross-site after a CORS preflight that the API allows, and
@@ -42,6 +43,11 @@ async def get_passwords(request: Request) -> PasswordHashing:
     return passwords
 
 
+async def get_ingestion_worker(request: Request) -> IngestionWorker:
+    worker: IngestionWorker = request.app.state.ingestion_worker
+    return worker
+
+
 def get_db(request: Request) -> Iterator[Session]:
     session_factory: sessionmaker[Session] = request.app.state.session_factory
     with session_factory() as session:
@@ -51,6 +57,7 @@ def get_db(request: Request) -> Iterator[Session]:
 SettingsDep = Annotated[Settings, Depends(get_app_settings)]
 StorageDep = Annotated[DocumentStorage, Depends(get_storage)]
 PasswordsDep = Annotated[PasswordHashing, Depends(get_passwords)]
+IngestionWorkerDep = Annotated[IngestionWorker, Depends(get_ingestion_worker)]
 DbSession = Annotated[Session, Depends(get_db)]
 SessionToken = Annotated[str | None, Depends(session_cookie)]
 

@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -11,26 +12,45 @@ from app.core.database import create_database_engine, create_session_factory
 from app.core.errors import register_error_handlers
 from app.core.middleware import REQUEST_ID_HEADER, RequestIdMiddleware, UnhandledErrorMiddleware
 from app.core.security import PasswordHashing
+from app.providers.embeddings import EmbeddingProvider, SentenceTransformerEmbeddings
 from app.providers.storage import LocalDocumentStorage
+from app.services.ingestion import DocumentIndexer
+from app.workers.ingestion import IngestionWorker
 
 
 def create_app(
-    settings: Settings | None = None, *, passwords: PasswordHashing | None = None
+    settings: Settings | None = None,
+    *,
+    passwords: PasswordHashing | None = None,
+    embeddings: EmbeddingProvider | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     engine = create_database_engine(settings)
+    session_factory = create_session_factory(engine)
+    storage = LocalDocumentStorage(settings.storage_dir)
+    # The model loads on first use, so creating the app stays fast.
+    embeddings = embeddings or SentenceTransformerEmbeddings(settings)
+    worker = IngestionWorker(DocumentIndexer(session_factory, storage, embeddings, settings))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
-        engine.dispose()
+        if settings.ingestion_worker_enabled:
+            worker.start()
+        try:
+            yield
+        finally:
+            # Waits for the document being indexed, if any, without blocking the event loop.
+            await asyncio.to_thread(worker.stop)
+            engine.dispose()
 
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.engine = engine
-    app.state.session_factory = create_session_factory(engine)
-    app.state.storage = LocalDocumentStorage(settings.storage_dir)
+    app.state.session_factory = session_factory
+    app.state.storage = storage
     app.state.passwords = passwords or PasswordHashing()
+    app.state.embeddings = embeddings
+    app.state.ingestion_worker = worker
 
     register_error_handlers(app)
     # The last middleware added runs first: request ID, then CORS, then the error fallback.

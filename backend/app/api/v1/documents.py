@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from app.api.deps import CurrentUser, DbSession, SettingsDep, StorageDep
+from app.api.deps import CurrentUser, DbSession, IngestionWorkerDep, SettingsDep, StorageDep
 from app.api.v1.schemas import DocumentList, DocumentOut
 from app.api.v1.uploads import FILE_FIELD, receive_single_file
 from app.services import documents as document_service
@@ -46,6 +46,7 @@ async def upload_document(
     session: DbSession,
     storage: StorageDep,
     settings: SettingsDep,
+    worker: IngestionWorkerDep,
 ) -> DocumentOut:
     # Membership is checked before the body is read.
     await run_in_threadpool(document_service.check_can_upload, session, user, workspace_id)
@@ -56,7 +57,9 @@ async def upload_document(
         )
     finally:
         received.discard()
-    return DocumentOut.model_validate(document)
+    response = DocumentOut.model_validate(document)
+    worker.notify()
+    return response
 
 
 @router.get("/workspaces/{workspace_id}/documents", summary="List a workspace's documents")
@@ -90,6 +93,24 @@ def download_document(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.post(
+    "/documents/{document_id}/retry",
+    status_code=202,
+    summary="Index a failed document again",
+    description=(
+        "Queues a document whose indexing failed. A queued or processing document is returned "
+        "unchanged; an indexed one is a conflict."
+    ),
+)
+def retry_document(
+    document_id: uuid.UUID, user: CurrentUser, session: DbSession, worker: IngestionWorkerDep
+) -> DocumentOut:
+    document = document_service.retry_document(session, user, document_id)
+    response = DocumentOut.model_validate(document)
+    worker.notify()
+    return response
 
 
 @router.delete(

@@ -11,11 +11,17 @@ dependencies = [
     "alembic==1.16.1",
     "argon2-cffi==25.1.0",
     "fastapi==0.162.0",
+    "huggingface-hub==2.3.0",
     "pgvector==0.4.1",
     "psycopg[binary]==3.2.10",
     "pydantic-settings==2.9.1",
+    "pypdf[crypto]==6.21.3",
+    "python-docx==1.2.0",
     "python-multipart==0.0.32",
+    "sentence-transformers==6.2.0",
     "sqlalchemy==2.0.41",
+    "torch==2.14.1",
+    "truststore==0.10.5",
     "uvicorn[standard]==0.34.2",
 ]
 
@@ -27,6 +33,17 @@ dev = [
     "ruff==0.11.13",
 ]
 
+# PyPI's Linux builds of PyTorch include CUDA libraries of several gigabytes. The embedding
+# model runs on the CPU (D-34), so Linux, including CI and the container image, uses the
+# CPU-only builds. PyPI's Windows and macOS builds are already CPU-only.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
@@ -36,6 +53,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
     "integration: needs the PostgreSQL test database (see tests/conftest.py)",
+    "model: needs the downloaded embedding model; skipped without it unless TEST_MODEL_REQUIRED=1",
 ]
 
 [tool.ruff]
@@ -50,3 +68,13 @@ python_version = "3.12"
 strict = true
 mypy_path = "."
 files = ["app"]
+
+# Large libraries the app calls in one place only; following their types, and through them
+# PyTorch's and NumPy's, adds minutes.
+[[tool.mypy.overrides]]
+module = ["huggingface_hub.*", "sentence_transformers.*"]
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = ["pgvector.*"]
+ignore_missing_imports = true

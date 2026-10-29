@@ -3,7 +3,8 @@
 Unit tests need nothing running. Integration tests (marked `integration`) use a real
 PostgreSQL database whose name must end in `_test`; it is created and migrated if needed.
 Set TEST_DATABASE_URL to point elsewhere. Without a reachable server those tests are skipped,
-unless TEST_DATABASE_REQUIRED=1 (as in CI), which makes them fail instead.
+unless TEST_DATABASE_REQUIRED=1 (as in CI), which makes them fail instead. Tests marked `model`
+use the downloaded embedding model and are skipped without it.
 """
 
 import os
@@ -24,11 +25,19 @@ from alembic import command
 from alembic.config import Config
 from app.core.security import PasswordHashing
 from app.main import create_app
-from tests.support import make_settings
+from app.providers.embeddings import EmbeddingProvider
+from tests.support import HashingEmbeddings, make_settings
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TEST_DATABASE_URL = "postgresql+psycopg://knowledge_assistant:local_dev_only@127.0.0.1:5432/knowledge_assistant_test"
-APP_TABLES = ("documents", "workspace_memberships", "workspaces", "user_sessions", "users")
+APP_TABLES = (
+    "document_chunks",
+    "documents",
+    "workspace_memberships",
+    "workspaces",
+    "user_sessions",
+    "users",
+)
 # The cheapest Argon2 parameters keep tests fast; the app itself uses the library defaults.
 CHEAP_PASSWORDS = PasswordHashing(PasswordHasher.from_parameters(profiles.CHEAPEST))
 
@@ -109,17 +118,26 @@ def storage_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def make_app(storage_dir: Path) -> Iterator[AppFactory]:
-    """Builds apps that don't touch a database unless given one."""
+    """Builds apps that don't touch a database unless given one.
+
+    They embed text with `HashingEmbeddings` unless given another provider, and their
+    background worker stays off unless `ingestion_worker_enabled=True`.
+    """
     apps: list[FastAPI] = []
 
-    def factory(**overrides: Any) -> FastAPI:
+    def factory(*, embeddings: EmbeddingProvider | None = None, **overrides: Any) -> FastAPI:
         overrides.setdefault("storage_dir", storage_dir)
-        app = create_app(make_settings(**overrides), passwords=CHEAP_PASSWORDS)
+        app = create_app(
+            make_settings(**overrides),
+            passwords=CHEAP_PASSWORDS,
+            embeddings=embeddings or HashingEmbeddings(),
+        )
         apps.append(app)
         return app
 
     yield factory
     for app in apps:
+        app.state.ingestion_worker.stop()
         app.state.engine.dispose()
 
 
