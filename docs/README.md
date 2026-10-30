@@ -5,6 +5,8 @@ Every document for the Evidence-backed Knowledge Assistant, with a folder for ea
 | Folder | What it holds | Update when | Remarks |
 |---|---|---|---|
 | [specification](specification/README.md) | The project specification: goals, user stories, architecture and diagrams, code layout, data model and API, roadmap, testing, security, costs, and the local quickstart | A decision or a phase changes what is built or how to run it | The source of truth. Moved here from the root `README.md` on 2026-10-29 |
+| [evaluation](evaluation/README.md) | How well the assistant finds passages and answers questions about a small synthetic set: the questions and documents, the scoring, the measured results and their conditions, trade-offs, and how to run it again | The questions, the test documents, the scoring, or the default retrieval settings change, or the evaluation is run again | Added in Phase 5 on 2026-10-30. Read every number with its conditions |
+| [privacy](privacy/README.md) | What the app stores, logs, and sends, for how long, how to delete it, and what the network can reach | What the app stores, logs, sends, or keeps changes | Added in Phase 5 on 2026-10-30. Covers local use; hosting is Phase 6 |
 | [dev-tools](dev-tools/README.md) | The Windows development tools installed in `D:\DevTools` without administrator rights: what is there, how each was checked, and how to keep them up to date | A tool in `D:\DevTools` is added, updated, or removed | Specific to the owner's machine. Moved here from `D:\DevTools\README.txt` on 2026-10-29 |
 | [tracker](tracker/README.md) | Progress against the specification: tasks, checks, decisions, risks, issues, and reference data | At the end of every work session | Start at its dashboard |
 

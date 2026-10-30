@@ -5,8 +5,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-knowledge_assistant}
       POSTGRES_USER: ${POSTGRES_USER:-knowledge_assistant}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_dev_only}
+    # Ports are published on 127.0.0.1 only, here and below, so other machines can't reach them.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -61,7 +62,7 @@ services:
       RETRIEVAL_MIN_SIMILARITY: ${RETRIEVAL_MIN_SIMILARITY:-0.5}
       QUESTION_CLEANUP_ENABLED: ${QUESTION_CLEANUP_ENABLED:-true}
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     volumes:
       - ./backend/app:/app/app
       - ./backend/alembic:/app/alembic
@@ -92,7 +93,7 @@ services:
     environment:
       VITE_API_BASE_URL: http://localhost:${API_PORT:-8000}
     ports:
-      - "${WEB_PORT:-5173}:5173"
+      - "127.0.0.1:${WEB_PORT:-5173}:5173"
     volumes:
       - ./frontend:/app
       - frontend_node_modules:/app/node_modules
