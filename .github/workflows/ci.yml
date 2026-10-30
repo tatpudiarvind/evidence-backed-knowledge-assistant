@@ -112,9 +112,8 @@ jobs:
       - name: Validate the Compose file
         run: docker compose config --quiet
       - name: Build and start the stack
+        # The migrate service brings the schema up to date before the API starts.
         run: docker compose up --build --detach --wait --wait-timeout 300
-      - name: Apply migrations
-        run: docker compose run --rm backend alembic upgrade head
       - name: Download the embedding model
         run: |
           for attempt in 1 2 3; do
@@ -194,12 +193,204 @@ jobs:
           # Deleting a document deletes the answers that cite it.
           test "$(curl --fail --silent --show-error -b "$jar" \
             "$api/workspaces/$workspace_id/questions" | jq '.items | length')" = "0"
+      - name: Check the API never ran before the migrations
+        run: |
+          if docker compose logs backend | grep -E 'UndefinedTable|relation .* does not exist'; then
+            echo "The API reached the database before its tables existed."
+            exit 1
+          fi
       - name: Check readiness reports 503 when the database stops
         run: |
           docker compose stop db
           status="$(curl --silent --output /dev/null --max-time 30 --write-out '%{http_code}' http://localhost:8000/health/ready || true)"
           echo "readiness status with the database stopped: ${status}"
           test "${status}" = "503"
+      - name: Show service status and logs
+        if: always()
+        run: |
+          docker compose ps --all
+          docker compose logs --no-color --tail 200
+      - name: Tear down
+        if: always()
+        run: docker compose down --volumes
+
+  production-e2e:
+    name: production images and end-to-end tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # The production-style stack: the API's production image behind nginx.
+      COMPOSE_FILE: compose.prod.yaml
+    steps:
+      - uses: actions/checkout@v7
+      - name: Create .env from the example
+        run: cp .env.example .env
+      - name: Validate the Compose file
+        run: docker compose config --quiet
+      - name: Check both stacks give the API the same settings
+        # FORWARDED_ALLOW_IPS is read by uvicorn, and only the production stack has a proxy.
+        run: |
+          development="$(docker compose -f compose.yaml config --format json \
+            | jq -c '.services.backend.environment | keys')"
+          production="$(docker compose config --format json \
+            | jq -c '.services.backend.environment | del(.FORWARDED_ALLOW_IPS) | keys')"
+          echo "development: ${development}"
+          echo "production:  ${production}"
+          test "${development}" = "${production}"
+      - name: Build and start the stack
+        run: docker compose up --build --detach --wait --wait-timeout 300
+      - name: Download the embedding model
+        run: |
+          for attempt in 1 2 3; do
+            if docker compose run --rm backend python -m app.cli download-embedding-model; then
+              exit 0
+            fi
+            echo "Download attempt ${attempt} failed."
+            sleep 15
+          done
+          exit 1
+      - name: Check the containers run without root rights, test tools, or writable files
+        # Each check passes only when it ran and found what it expects, so a failed
+        # `docker compose exec` fails the step too.
+        run: |
+          for service in backend web; do
+            uid="$(docker compose exec -T "$service" id -u)"
+            echo "${service} runs as user ${uid}"
+            test "${uid}" != "0"
+          done
+          docker compose exec -T backend python -c \
+            "import importlib.util, sys; sys.exit(importlib.util.find_spec('pytest') is not None)"
+          docker compose exec -T backend sh -c '! command -v uv'
+          # /tmp is the one writable place. The app user owns its home folder, and nginx's user
+          # owns its configuration folder, so only the read-only file system stops those writes.
+          docker compose exec -T backend sh -c '
+            touch /tmp/probe
+            for path in /app/app/probe /home/app/probe; do
+              if touch "$path" 2> /dev/null; then echo "$path is writable"; exit 1; fi
+            done'
+          docker compose exec -T web sh -c '
+            touch /tmp/probe
+            for path in /usr/share/nginx/html/probe /etc/nginx/conf.d/probe; do
+              if touch "$path" 2> /dev/null; then echo "$path is writable"; exit 1; fi
+            done'
+      - name: Check only the web server is reachable from this computer
+        run: |
+          if curl --silent --show-error --max-time 5 http://localhost:8000/health/live; then
+            echo "The API is reachable without nginx."
+            exit 1
+          fi
+          if timeout 5 bash -c 'exec 3<> /dev/tcp/127.0.0.1/5432'; then
+            echo "PostgreSQL is reachable from outside the stack."
+            exit 1
+          fi
+      - name: Check nginx serves the app with its security headers and passes API requests on
+        run: |
+          web=http://localhost:8080
+          headers="$(curl --fail --silent --show-error --dump-header - --output /dev/null "$web/")"
+          echo "$headers"
+          echo "$headers" | grep -i "^content-security-policy: default-src 'self'"
+          echo "$headers" | grep -i '^x-frame-options: DENY'
+          echo "$headers" | grep -i '^x-content-type-options: nosniff'
+          # Any other path is a page of the app.
+          curl --fail --silent --show-error "$web/some/page" | grep '<div id="root">'
+          curl --fail --silent --show-error "$web/health/ready" | jq -e '.status == "ok"'
+          curl --fail --silent --show-error --dump-header - --output /dev/null "$web/health/live" \
+            | grep -i '^x-request-id:'
+          status="$(curl --silent --show-error --output /tmp/body.json --write-out '%{http_code}' \
+            "$web/api/v1/auth/me")"
+          cat /tmp/body.json; echo
+          test "${status}" = "401"
+          jq -e '.error.code == "not_authenticated"' /tmp/body.json
+      - name: Check size limits and a download through nginx
+        run: |
+          api=http://localhost:8080/api/v1
+          jar="$(mktemp)"
+          # nginx itself refuses request bodies over 12 MiB, in the API's error format.
+          head -c 13631488 /dev/zero > /tmp/thirteen-mib.bin
+          status="$(curl --silent --show-error --output /tmp/body.json --write-out '%{http_code}' \
+            -H 'Content-Type: application/json' -H 'X-CSRF-Protection: 1' \
+            --data-binary @/tmp/thirteen-mib.bin "$api/auth/register")"
+          cat /tmp/body.json; echo
+          test "${status}" = "413"
+          jq -e '.error.code == "request_too_large"' /tmp/body.json
+          curl --fail --silent --show-error -c "$jar" \
+            -H 'Content-Type: application/json' -H 'X-CSRF-Protection: 1' \
+            -d '{"email":"production-check@example.com","password":"production check password"}' \
+            "$api/auth/register"
+          echo
+          workspace_id="$(curl --fail --silent --show-error -b "$jar" \
+            -H 'Content-Type: application/json' -H 'X-CSRF-Protection: 1' \
+            -d '{"name":"Production check"}' "$api/workspaces" | jq -r .id)"
+          # A file over the API's 10 MiB limit gets past nginx, and the API refuses it itself.
+          head -c 11534336 /dev/zero | tr '\0' 'a' > /tmp/eleven-mib.txt
+          status="$(curl --silent --show-error --output /tmp/body.json --write-out '%{http_code}' \
+            -b "$jar" -H 'X-CSRF-Protection: 1' \
+            -F 'file=@/tmp/eleven-mib.txt;filename=eleven-mib.txt;type=text/plain' \
+            "$api/workspaces/$workspace_id/documents")"
+          cat /tmp/body.json; echo
+          test "${status}" = "413"
+          jq -e '.error.code == "file_too_large"' /tmp/body.json
+          # A download keeps the API's headers, with nosniff sent once.
+          printf 'Synthetic production check.\n' > /tmp/small.txt
+          document_id="$(curl --fail --silent --show-error -b "$jar" -H 'X-CSRF-Protection: 1' \
+            -F 'file=@/tmp/small.txt;filename=small.txt' \
+            "$api/workspaces/$workspace_id/documents" | jq -r .id)"
+          headers="$(curl --fail --silent --show-error -b "$jar" --dump-header - \
+            --output /tmp/downloaded.txt "$api/documents/$document_id/file")"
+          echo "$headers"
+          cmp /tmp/downloaded.txt /tmp/small.txt
+          echo "$headers" | grep -i '^content-disposition: attachment'
+          test "$(echo "$headers" | grep -ci '^x-content-type-options:')" = "1"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Install the end-to-end test tools
+        working-directory: e2e
+        # There is no lock file yet; this makes the first one, which the next step keeps.
+        run: npm install --no-audit --no-fund
+      - name: Keep the lock file
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-package-lock
+          path: e2e/package-lock.json
+          if-no-files-found: error
+      - name: Type check the end-to-end tests
+        working-directory: e2e
+        run: npm run typecheck
+      - name: Install Chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+      - name: Run the end-to-end tests
+        working-directory: e2e
+        env:
+          E2E_BASE_URL: http://localhost:8080
+        run: npx playwright test
+      - name: Keep the test report and screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-results
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+            e2e/screenshots/
+          if-no-files-found: ignore
+      - name: Check nginx answers in the API's error format while the API is down
+        run: |
+          docker compose stop backend
+          # nginx looks up the API's address again after 10 seconds (frontend/nginx.conf).
+          sleep 12
+          status="$(curl --silent --show-error --max-time 30 --output /tmp/body.json \
+            --write-out '%{http_code}' http://localhost:8080/api/v1/auth/me)"
+          cat /tmp/body.json; echo
+          test "${status}" = "502"
+          jq -e '.error.code == "api_unreachable"' /tmp/body.json
+      - name: Check the API never ran before the migrations
+        run: |
+          if docker compose logs backend | grep -E 'UndefinedTable|relation .* does not exist'; then
+            echo "The API reached the database before its tables existed."
+            exit 1
+          fi
       - name: Show service status and logs
         if: always()
         run: |

@@ -1,0 +1,147 @@
+# A production-style stack on this computer: the API's production image (no test tools, run by
+# a user without root rights) behind nginx, which serves the built web app. Only nginx is
+# published, on 127.0.0.1; the API and the database are reachable only inside the stack.
+# It has its own project name, so its volumes are separate from the development stack's.
+#
+#   docker compose -f compose.prod.yaml up --build --detach --wait
+#   docker compose -f compose.prod.yaml run --rm backend python -m app.cli download-embedding-model
+#   Then open http://localhost:8080 (PROD_WEB_PORT).
+#   docker compose -f compose.prod.yaml down          # --volumes also deletes its data
+#
+# It serves plain HTTP to this computer only; docs/operations/README.md lists what a real
+# deployment would add.
+
+name: evidence-backed-knowledge-assistant-production
+
+x-backend-build: &backend-build
+  context: ./backend
+  target: production
+
+# The development stack's settings (compose.yaml), with production values where they differ.
+# CI checks that both list the same settings.
+x-backend-environment: &backend-environment
+  APP_ENV: production
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-knowledge_assistant}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-knowledge_assistant}
+  # The browser reaches the API through nginx, on the web app's own origin.
+  CORS_ORIGINS: "[]"
+  DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-3}
+  LOG_FORMAT: json
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  METRICS_ENABLED: ${METRICS_ENABLED:-false}
+  REGISTRATION_ENABLED: ${REGISTRATION_ENABLED:-true}
+  SESSION_LIFETIME_HOURS: ${SESSION_LIFETIME_HOURS:-12}
+  SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+  RATE_LIMITS_ENABLED: ${RATE_LIMITS_ENABLED:-true}
+  SIGN_IN_ATTEMPTS_PER_MINUTE: ${SIGN_IN_ATTEMPTS_PER_MINUTE:-10}
+  REGISTRATION_ATTEMPTS_PER_HOUR: ${REGISTRATION_ATTEMPTS_PER_HOUR:-10}
+  QUESTIONS_PER_MINUTE: ${QUESTIONS_PER_MINUTE:-10}
+  # nginx accepts request bodies of up to 12 MiB (frontend/nginx.conf), so keep this below
+  # about 11.9 MiB, or raise nginx's limit too.
+  MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10485760}
+  MAX_DOCUMENTS_PER_WORKSPACE: ${MAX_DOCUMENTS_PER_WORKSPACE:-100}
+  UPLOAD_TIMEOUT_SECONDS: ${UPLOAD_TIMEOUT_SECONDS:-120}
+  INGESTION_WORKER_ENABLED: ${INGESTION_WORKER_ENABLED:-true}
+  CHUNK_SIZE_CHARACTERS: ${CHUNK_SIZE_CHARACTERS:-1000}
+  CHUNK_OVERLAP_CHARACTERS: ${CHUNK_OVERLAP_CHARACTERS:-150}
+  MAX_DOCUMENT_PAGES: ${MAX_DOCUMENT_PAGES:-500}
+  MAX_DOCUMENT_CHARACTERS: ${MAX_DOCUMENT_CHARACTERS:-2000000}
+  PARSE_TIMEOUT_SECONDS: ${PARSE_TIMEOUT_SECONDS:-120}
+  EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
+  # As in compose.yaml: answers list matching passages unless both COMPOSE_ settings name an
+  # Ollama server this container can reach.
+  LLM_PROVIDER: ${COMPOSE_LLM_PROVIDER:-none}
+  OLLAMA_BASE_URL: ${COMPOSE_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:4b-instruct-2507-q4_K_M}
+  # nginx waits 180 seconds for the API (frontend/nginx.conf), so keep this well below that.
+  LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+  OLLAMA_CONTEXT_TOKENS: ${OLLAMA_CONTEXT_TOKENS:-4096}
+  ANSWER_CONTEXT_CHARACTERS: ${ANSWER_CONTEXT_CHARACTERS:-6000}
+  RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-4}
+  RETRIEVAL_MIN_SIMILARITY: ${RETRIEVAL_MIN_SIMILARITY:-0.5}
+  QUESTION_CLEANUP_ENABLED: ${QUESTION_CLEANUP_ENABLED:-true}
+  # Read by uvicorn, not the app. Only nginx can reach the API, and it replaces any forwarded
+  # address the browser sends, so the address it passes on is trusted (the rate limits use it).
+  FORWARDED_ALLOW_IPS: "*"
+
+# The containers' own files can't be changed, apart from the volumes and a temporary /tmp, and
+# they run without Linux capabilities or a way to gain privileges.
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+# Docker keeps every log line otherwise.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+services:
+  db:
+    image: pgvector/pgvector:0.8.0-pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-knowledge_assistant}
+      POSTGRES_USER: ${POSTGRES_USER:-knowledge_assistant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    # No ports: only the API and the migrations reach the database.
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    logging: *logging
+
+  # Brings the database schema up to date, then exits; the API starts once it has succeeded.
+  migrate:
+    build: *backend-build
+    environment: *backend-environment
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+    <<: *hardening
+    logging: *logging
+
+  backend:
+    build: *backend-build
+    environment: *backend-environment
+    volumes:
+      - document_storage:/app/storage
+      # Fetch the model into it once, with the `run` command at the top of this file.
+      - embedding_models:/app/models
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    <<: *hardening
+    logging: *logging
+
+  web:
+    build:
+      context: ./frontend
+      target: production
+    ports:
+      - "127.0.0.1:${PROD_WEB_PORT:-8080}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    <<: *hardening
+    logging: *logging
+
+volumes:
+  postgres_data:
+  document_storage:
+  embedding_models:

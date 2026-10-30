@@ -1,3 +1,6 @@
+# The API and its migrations use the same database.
+x-database-url: &database-url postgresql+psycopg://${POSTGRES_USER:-knowledge_assistant}:${POSTGRES_PASSWORD:-local_dev_only}@db:5432/${POSTGRES_DB:-knowledge_assistant}
+
 services:
   db:
     image: pgvector/pgvector:0.8.0-pg16
@@ -21,13 +24,29 @@ services:
       retries: 10
       start_period: 5s
 
+  # Brings the database schema up to date, then exits; the API starts once it has succeeded.
+  migrate:
+    build:
+      context: ./backend
+      target: development
+    environment:
+      DATABASE_URL: *database-url
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+
   backend:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      target: development
     environment:
       APP_ENV: ${APP_ENV:-development}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-knowledge_assistant}:${POSTGRES_PASSWORD:-local_dev_only}@db:5432/${POSTGRES_DB:-knowledge_assistant}
+      DATABASE_URL: *database-url
       CORS_ORIGINS: '["http://localhost:${WEB_PORT:-5173}"]'
       DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-3}
       LOG_FORMAT: ${LOG_FORMAT:-text}
@@ -75,6 +94,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     command:
       [
         "uvicorn",
@@ -89,7 +110,7 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      target: development
     environment:
       VITE_API_BASE_URL: http://localhost:${API_PORT:-8000}
     ports:
