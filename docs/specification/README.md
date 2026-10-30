@@ -241,7 +241,8 @@ evidence-backed-knowledge-assistant/
     app/
       main.py                 # server entry point: sets up logging and builds the app
       factory.py              # builds the FastAPI app from settings; starts and stops the workers
-      cli.py                  # commands: download the embedding model, run and compare evaluations
+      cli.py                  # commands: download the embedding model, run and compare evaluations,
+                              #   write the demo files
       api/                    # health checks, metrics, and shared request dependencies (rate limits)
       api/v1/                 # routers, request/response schemas, streamed uploads
       core/                   # settings, database, errors, logging, metrics, middleware,
@@ -258,7 +259,8 @@ evidence-backed-knowledge-assistant/
     models/                   # downloaded embedding model (git-ignored)
     storage/                  # uploaded files when the API runs on the host (git-ignored)
     tests/                    # unit, integration, API tests
-    Dockerfile                # backend image, built from this folder
+    Dockerfile                # backend images, built from this folder: development, and production
+                              #   without test tools
   frontend/
     src/
       api/                    # typed API client with runtime response checks
@@ -268,24 +270,37 @@ evidence-backed-knowledge-assistant/
       features/documents/     # upload queue, list, live status, retry, download, delete
       features/questions/     # question form, recent questions, answers and their sources
       test/                   # shared test setup and API fakes
-    Dockerfile                # frontend image, built from this folder
+    Dockerfile                # frontend images, built from this folder: the Vite dev server, and
+                              #   the built app served by nginx
+    nginx.conf                # security headers, limits; passes /api/ and /health/ to the API
+  e2e/
+    tests/                    # Playwright browser tests, with axe accessibility checks
+    playwright.config.ts      # runs them one at a time against the production-style stack
   evals/
     questions.jsonl           # evaluation questions: expected sources and facts, forbidden text
     corpus/                   # plain-text sources of the synthetic test documents
     results/                  # committed results: search only, and with the local model
+  demo-files/                 # synthetic documents to try the app with, written by the CLI
+                              #   (git-ignored)
   infra/
     terraform/                # optional cloud deployment, later phase
-  compose.yaml                # local stack: API, UI, PostgreSQL/pgvector
-  .github/workflows/          # ci.yml: checks, evaluation, Compose smoke test; audit.yml: dependencies
+  compose.yaml                # development stack: PostgreSQL/pgvector, migrations, API, Vite
+  compose.prod.yaml           # production-style stack: PostgreSQL/pgvector, migrations, API, nginx
+  .github/workflows/          # ci.yml: checks, evaluation, both stacks, end-to-end tests;
+                              #   audit.yml: dependencies
   README.md                   # front page: summary, status, links to the documents
   docs/                       # every project document, one folder per kind
     README.md                 # index of the documents
     specification/            # this specification
+    architecture/             # how the code is built, with diagrams
+    api/                      # every endpoint, the errors, and the limits
+    security/                 # how accounts, workspaces, and documents are protected; known gaps
+    operations/               # how to run, check, back up, and upgrade the production-style stack
     evaluation/               # how retrieval and answers were measured, the results, their limits
     privacy/                  # what is stored, logged, and sent, and for how long
+    screenshots/              # the app's screens, taken by the end-to-end tests
     dev-tools/                # the Windows development tools, without containers or admin rights
     tracker/                  # tasks, checks, decisions, risks, reference data
-                              # later: architecture, API, security, operations
 ```
 
 Folders are created when first needed. `alembic/`, `compose.yaml`, and a Dockerfile beside each build context follow the tools' own conventions. The frontend has no client-side router yet, because each state (signed out, first workspace, workspace) is a single screen; add a `routes/` folder if pages need their own URLs.
@@ -510,6 +525,7 @@ Limits: sign-in attempts and registrations are counted per network address (10 a
 - Add accessibility and browser smoke tests; architecture/API/security/operations docs; screenshots; demo data; clear limitations.
 - Deploy only after estimating costs. Use one cloud, least-privilege identity, restricted network access, managed secrets, HTTPS, backups, resource budgets, and teardown steps. Never commit secrets or expose a database publicly.
 - **Done when:** an external reviewer can understand the architecture, run the app, inspect tests/evaluation, and reproduce the demo. Cloud deployment is optional; no permanent free tier is assumed.
+- **Outcome:** the production-style stack (`compose.prod.yaml`), in which nginx serves the built web app; end-to-end tests in `e2e/`, with automated accessibility checks, run against it in CI; demo files; the [screenshots](../screenshots/README.md); the [architecture](../architecture/README.md), [API](../api/README.md), [security](../security/README.md), and [operations](../operations/README.md) guides; and a list of limitations in the root `README.md`. The optional cloud deployment is deferred, so the app hasn't been deployed; the operations guide lists [what a real deployment adds](../operations/README.md#what-a-real-deployment-adds).
 
 ## 11. Quality strategy
 
@@ -570,17 +586,16 @@ The first coding milestone should be **Phase 1 only**: create a clean repository
 
 ## Local quickstart
 
-What works today (Phases 1 to 5): create a local account and workspaces, then upload, list, download, and delete PDF, Word (.docx), and plain-text files. Each uploaded document is indexed in the background: its text is extracted, split into chunks, and embedded with a local model, while its status moves from **Queued** through **Processing** to **Ready**. A document that can't be indexed shows **Failed**, a message that says what to do, and a **Retry** button. Once a document is **Ready**, ask questions about the workspace's documents. With a local Ollama model, the answer is written from the closest passages and cites them by document and page or section; without one, the closest passages are the answer. When the documents don't cover a question, you're told so instead of getting a guess. Questions and answers are deleted after 3 days, or sooner if you delete a document they cite. Retrieval and answers were measured on a small synthetic set; the [evaluation](../evaluation/README.md) gives the numbers and the conditions they hold under. Upload only documents you are allowed to use, and never real patient or confidential data.
+What works today (Phases 1 to 6): create a local account and workspaces, then upload, list, download, and delete PDF, Word (.docx), and plain-text files. Each uploaded document is indexed in the background: its text is extracted, split into chunks, and embedded with a local model, while its status moves from **Queued** through **Processing** to **Ready**. A document that can't be indexed shows **Failed**, a message that says what to do, and a **Retry** button. Once a document is **Ready**, ask questions about the workspace's documents. With a local Ollama model, the answer is written from the closest passages and cites them by document and page or section; without one, the closest passages are the answer. When the documents don't cover a question, you're told so instead of getting a guess. Questions and answers are deleted after 3 days, or sooner if you delete a document they cite. Retrieval and answers were measured on a small synthetic set; the [evaluation](../evaluation/README.md) gives the numbers and the conditions they hold under. Upload only documents you are allowed to use, and never real patient or confidential data.
 
 From the project root, copy `.env.example` to `.env`; Docker Compose, the API, and the Vite dev server all take their settings from this one file. Then run:
 
 ```powershell
 docker compose up --build -d
-docker compose run --rm backend alembic upgrade head
 docker compose run --rm backend python -m app.cli download-embedding-model
 ```
 
-The last command downloads the embedding model (about 135 MB) once, into the `embedding_models` volume, and checks that it loads; indexing itself never downloads anything. Documents uploaded before the download fail with a message asking for it; select **Retry** on them afterward.
+Each time the stack starts, its `migrate` service applies the database migrations, and the API starts only once they have succeeded. The second command downloads the embedding model (about 135 MB) once, into the `embedding_models` volume, and checks that it loads; indexing itself never downloads anything. Documents uploaded before the download fail with a message asking for it; select **Retry** on them afterward.
 
 Under Compose, answers list the closest passages, because the API container runs with `LLM_PROVIDER=none` by default: Ollama isn't part of the stack, and on the host it normally listens on `127.0.0.1` only, out of the containers' reach. To have a model write the answers, run Ollama where the API container can reach it, pull the model there once (`ollama pull qwen3:4b-instruct-2507-q4_K_M`, about 2.5 GB), and set `COMPOSE_LLM_PROVIDER=ollama` and `COMPOSE_OLLAMA_BASE_URL` in `.env`; this Compose setup hasn't been tested yet. Running the API directly on your machine (below) uses a local Ollama with the default settings.
 
@@ -589,6 +604,8 @@ Open `http://localhost:5173`, check that the page reports the API and database a
 Backend dependencies are locked in `backend/uv.lock`; install [uv](https://docs.astral.sh/uv/getting-started/installation/) first (CI uses uv 0.13.5). The first `uv sync` downloads PyTorch for the embedding model, so it takes a while. Run backend checks from `backend` with `uv sync --locked --extra dev`, then `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy app`, and `uv run pytest`. The API and database tests need PostgreSQL: they use their own database, `knowledge_assistant_test` on `127.0.0.1:5432` with the development credentials, which they create and migrate when needed and empty before each test. Set `TEST_DATABASE_URL` to use another database; its name must end in `_test`. Without a reachable server those tests are skipped; set `TEST_DATABASE_REQUIRED=1`, as CI does, to make them fail instead. Tests use a fake embedder, apart from one test marked `model` that loads the downloaded embedding model: it is skipped when the model is missing, and `TEST_MODEL_REQUIRED=1`, which CI also sets, makes it fail instead. Tests never call Ollama: they turn the model off (`LLM_PROVIDER=none`) and, when a test needs written answers, give the API a stand-in model with set replies. Run frontend checks from `frontend` with `npm ci`, `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`. To measure retrieval and answers, see [running the evaluation](../evaluation/README.md#running-the-evaluation).
 
 Stop local services with `docker compose down`; add `-v` only if you intentionally want to delete the local database, the uploaded files, and the downloaded model, which all live in Compose volumes.
+
+This is the development stack, for changing the code. To run the app as it would be deployed, with nginx serving the built web app at `http://localhost:8080` and only nginx reachable, and to run the end-to-end tests against it, see the [operations guide](../operations/README.md). It also shows how to write the evaluation's synthetic documents to `demo-files/` to [try the app out](../operations/README.md#trying-it-out).
 
 ### Without containers (no administrator rights)
 

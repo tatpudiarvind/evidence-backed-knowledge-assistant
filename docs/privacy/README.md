@@ -1,6 +1,6 @@
 # Privacy and data handling
 
-What the Evidence-backed Knowledge Assistant keeps, where it keeps it, for how long, and how to remove it. This page describes the code as of Phase 5 (2026-10-30). The requirements it follows are in the [specification](../specification/README.md#12-security-privacy-and-operational-requirements).
+What the Evidence-backed Knowledge Assistant keeps, where it keeps it, for how long, and how to remove it. This page describes the code as of Phase 6 (2026-10-31), run on one computer: without containers, under the development stack (`compose.yaml`), or under the production-style stack (`compose.prod.yaml`). The requirements it follows are in the [specification](../specification/README.md#12-security-privacy-and-operational-requirements).
 
 The assistant is a local demo of document retrieval and summarization. It isn't certified for regulated or clinical use, and its answers aren't professional, medical, legal, or financial advice. Upload only public, synthetic, or licensed documents you're allowed to use, and never real patient or confidential data.
 
@@ -15,7 +15,8 @@ The assistant is a local demo of document retrieval and summarization. It isn't 
 | Document details, and its text and embeddings in chunks | PostgreSQL: `documents`, `document_chunks` | The document is deleted |
 | Questions, answers, and citations | PostgreSQL: `questions`, `answers`, `citations` | 3 days after the question was asked, or sooner when a document an answer cites is deleted |
 | The session cookie | The browser | Sign-out, or 12 hours by default |
-| Logs | Standard error: a terminal, or Docker's container logs | As long as you keep them |
+| Logs | Standard error: a terminal, or Docker's container logs | As long as you keep them. The production-style stack keeps up to three files of 10 MB for each container |
+| nginx's access log, in the production-style stack only: each request's client address and full path | Docker's container logs | Up to three files of 10 MB, or until the container is removed |
 | Metrics and rate-limit counters | The API's memory | The API restarts |
 | The embedding model | `backend/models`, or the `embedding_models` volume | You delete it |
 
@@ -75,7 +76,7 @@ Ollama keeps its models in its own folder. The app asks it to keep nothing; see 
 
 ## Logs
 
-The API logs to standard error, as text or, with `LOG_FORMAT=json`, as one JSON object per line. Under Compose, Docker keeps each container's log until the container is removed, which `docker compose down` does.
+The API logs to standard error, as text or, with `LOG_FORMAT=json`, as one JSON object per line. Under the development stack, Docker keeps each container's log until the container is removed, which `docker compose down` does; the production-style stack keeps less ([below](#in-the-production-style-stack)).
 
 - **Requests.** Each request is logged once, by its method, its route's template (such as `GET /api/v1/documents/{document_id}`), its status, and its duration. Client addresses, query strings, and the IDs in paths are left out; Uvicorn's own access log, which records them, is turned off.
 - **Events.** Other lines name things by their random IDs and count them: a document indexed into a number of chunks, or failed with an error code; a question answered or declined, with how many passages and citations; how long the model took; how many expired questions the cleanup deleted.
@@ -84,9 +85,17 @@ The API logs to standard error, as text or, with `LOG_FORMAT=json`, as one JSON 
   - `LOG_LEVEL=DEBUG` adds the details of unexpected indexing errors, which can quote a document.
   - An unexpected server error is logged with its traceback, and an exception's message can quote the data it failed on.
 
+### In the production-style stack
+
+- **The API** logs as JSON (`LOG_FORMAT=json`), with the same content as above.
+- **nginx** logs each request it serves, apart from its own health check, in its standard format: the client's address, the time, the method and the full path, with any IDs and query string in it, the status, the size of the response, the referrer, and the user agent. Unlike the API's lines, these record who asked for what. On one computer, the address is usually one of Docker's own; behind a real deployment, it would be each user's, so treat these lines as personal data.
+- **Docker** keeps up to three files of 10 MB for each container, and deletes the oldest lines beyond that. `docker compose -f compose.prod.yaml down` removes the containers, and their logs with them.
+
+The [operations guide](../operations/README.md#logs) shows a line of each.
+
 ## Metrics
 
-With `METRICS_ENABLED=true`, the API serves counts at `/metrics`, in Prometheus's text format: requests by method, route template, and status; request durations; answers by mode and outcome; and documents processed, by outcome. They hold no IDs, names, or text, and stay in the API's memory until it restarts. Anyone who can reach the API can read `/metrics`, so it is off by default.
+With `METRICS_ENABLED=true`, the API serves counts at `/metrics`, in Prometheus's text format: requests by method, route template, and status; request durations; answers by mode and outcome; and documents processed, by outcome. They hold no IDs, names, or text, and stay in the API's memory until it restarts. Anyone who can reach the API can read `/metrics`, so it is off by default. In the production-style stack, nginx doesn't pass `/metrics` on and the API isn't published, so only containers on the stack's own network could read it.
 
 ## Rate limits
 
@@ -109,8 +118,9 @@ Sign-in attempts (10 a minute) and registrations (10 an hour) are counted per ne
 
 - **Without containers**, PostgreSQL, the API, and the Vite dev server listen on localhost only.
 - **Under Docker Compose**, the database, API, and web app ports are published on `127.0.0.1` only, so other computers can't reach them. Until Phase 5 they were published on every network interface, which could expose the database, with its default password, to the network (issue I-38).
-- **The database password** in `.env.example`, `local_dev_only`, is for local use. Change it before sharing a computer.
-- **Before opening the app to other computers**, serve it over HTTPS with `SESSION_COOKIE_SECURE=true`, behind a reverse proxy that limits how long headers and bodies may take to arrive and how many connections are open, which the API doesn't. Uvicorn should trust forwarded addresses from that proxy only (its `--forwarded-allow-ips` option, `127.0.0.1` by default), so rate limits count clients rather than the proxy. Turn registration off, and keep `/metrics` unreachable. None of this has been tried yet; deployment is Phase 6 (spec §10).
+- **In the production-style stack**, only nginx's port is published, on `127.0.0.1`. The API and the database have no published ports, so only the containers in the stack reach them, and nginx passes on only `/api/` and `/health/`.
+- **The database password** in `.env.example`, `local_dev_only`, is for local use. Change it before sharing a computer. The production-style stack won't start without a `POSTGRES_PASSWORD`, but copying `.env.example` sets this public one, so [set your own](../operations/README.md#first-start) before its database is first created.
+- **Before opening the app to other computers**, serve it over HTTPS with `SESSION_COOKIE_SECURE=true`, behind a reverse proxy that limits how long headers and bodies may take to arrive and how many connections are open, which the API doesn't. Uvicorn should trust forwarded addresses from that proxy only (its `--forwarded-allow-ips` option, `127.0.0.1` by default), so rate limits count clients rather than the proxy. Turn registration off, and keep `/metrics` unreachable. The production-style stack covers part of this on one computer: its nginx gives up on a request whose headers take more than 30 seconds or whose body stops arriving for 30 seconds, but doesn't limit how many connections are open; only nginx can reach the API, which trusts the address nginx passes on; and `/metrics` isn't passed on. It still serves plain HTTP, and hasn't been deployed: the [operations guide](../operations/README.md#what-a-real-deployment-adds) lists what a real deployment adds.
 
 ## How this is checked
 
