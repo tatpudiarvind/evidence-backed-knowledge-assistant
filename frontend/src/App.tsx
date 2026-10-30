@@ -59,11 +59,11 @@ export default function App() {
   return (
     <div className="page-shell">
       <header className="topbar">
-        <a className="brand" href="/" aria-label="Evidence-backed home">
+        <a className="brand" href="/">
           <span className="brand-mark" aria-hidden="true">
             E
           </span>
-          <span>Evidence-backed</span>
+          <span>Evidence-backed<span className="visually-hidden"> home</span></span>
         </a>
         {session.state === "signed-in" ? (
           <div className="account">

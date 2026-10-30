@@ -20,24 +20,43 @@ const PASSWORD = "end-to-end test password";
 
 const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
-/** Fails on anything axe finds against WCAG 2.2 A and AA, and attaches its findings. */
+/** Waits for animations that end (such as the sign-in card fading in) to finish. */
+async function settle(page: Page) {
+  await page.evaluate(async () => {
+    const ending = document
+      .getAnimations()
+      .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity);
+    // A removed element cancels its animation, which rejects the promise.
+    await Promise.all(ending.map((animation) => animation.finished.catch(() => undefined)));
+  });
+}
+
+/**
+ * Reports anything axe finds against WCAG 2.2 A and AA, and attaches its findings. Axe checks
+ * the settled page: mid-fade, text is paler than anyone reads it. The check is soft, so the
+ * journey goes on and one run reports the problems on every screen; the test still fails.
+ */
 async function checkAccessibility(page: Page, testInfo: TestInfo, screen: string) {
+  await settle(page);
   const results = await new AxeBuilder({ page }).withTags(WCAG_TAGS).analyze();
   await testInfo.attach(`axe-${screen}.json`, {
     body: JSON.stringify(results.violations, null, 2),
     contentType: "application/json",
   });
-  const problems = results.violations.map(
-    (violation) =>
-      `${violation.id} (${violation.impact ?? "unknown impact"}): ${violation.nodes
-        .map((node) => node.target.join(" "))
-        .join(", ")}`,
+  const problems = results.violations.flatMap((violation) =>
+    violation.nodes.map(
+      (node) =>
+        `${violation.id} (${violation.impact ?? "unknown impact"}) at ${node.target.join(" ")}: ${(
+          node.failureSummary ?? violation.help
+        ).replace(/\s+/g, " ")}`,
+    ),
   );
-  expect(problems, `axe found WCAG problems on the ${screen} screen`).toEqual([]);
+  expect.soft(problems, `axe found WCAG problems on the ${screen} screen`).toEqual([]);
 }
 
 /** Saves a full-page screenshot for the documentation (e2e/screenshots/). */
 async function screenshot(page: Page, name: string) {
+  await settle(page);
   await page.screenshot({ path: fileURLToPath(new URL(name, SCREENSHOTS)), fullPage: true });
 }
 
