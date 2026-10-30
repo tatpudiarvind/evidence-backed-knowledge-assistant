@@ -29,6 +29,8 @@ coverage/
 data/
 storage/
 /backend/models/
+# Built by `python -m app.cli write-demo-files`
+/demo-files/
 
 # Editors and operating systems
 .vscode/

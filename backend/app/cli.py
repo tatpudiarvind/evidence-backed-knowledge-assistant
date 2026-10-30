@@ -25,6 +25,8 @@ from app.providers.llm import OllamaChatModel
 MODEL_FILE_PATTERNS = ["*.json", "*.txt", "*.safetensors", "README.md"]
 SKIPPED_FILE_PATTERNS = ["onnx/*", "openvino/*"]
 EVALUATION_DIR = REPOSITORY_ROOT / "evals"
+# Ignored by Git (.gitignore), as the files are built from the corpus on demand.
+DEMO_FILES_DIR = REPOSITORY_ROOT / "demo-files"
 # The evaluation empties its database first, so it only uses one named for it.
 _EVALUATION_DATABASE = re.compile(r"[A-Za-z0-9_]+_eval")
 
@@ -200,6 +202,30 @@ def compare_results(arguments: argparse.Namespace) -> int:
     return 1
 
 
+def write_demo_files(arguments: argparse.Namespace) -> int:
+    """Write the evaluation's synthetic documents as the PDF, Word, and text files a user would
+    upload, to try the app with."""
+    from app.evaluation.corpus import CorpusError, load_corpus
+
+    try:
+        documents = load_corpus(arguments.corpus)
+    except (CorpusError, OSError) as error:
+        print(f"Can't build the demo files: {error}", file=sys.stderr)
+        return 1
+    output: Path = arguments.output
+    try:
+        output.mkdir(parents=True, exist_ok=True)
+        for document in documents:
+            (output / document.name).write_bytes(document.content)
+    except OSError as error:
+        print(f"Can't write the demo files: {error}", file=sys.stderr)
+        return 1
+    for document in documents:
+        print(f"  {document.name} ({len(document.content):,} bytes)")
+    print(f"Wrote {len(documents)} synthetic documents to {output}. Upload them to try the app.")
+    return 0
+
+
 def _first_line(error: SQLAlchemyError) -> str:
     """A database error's own message, without the statement and parameters SQLAlchemy adds."""
     cause = getattr(error, "orig", None) or error
@@ -258,6 +284,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     comparison.add_argument("expected", type=Path, help="Results to compare with.")
     comparison.add_argument("actual", type=Path, help="Results to check.")
+    demo = commands.add_parser(
+        "write-demo-files",
+        help="Write synthetic PDF, Word, and text documents to upload when trying the app.",
+        description=(
+            "Build the evaluation corpus's synthetic documents as the files a user would upload, "
+            "and write them to a folder, replacing any files of the same names."
+        ),
+    )
+    demo.add_argument(
+        "--output",
+        type=Path,
+        default=DEMO_FILES_DIR,
+        help="Folder to write to (default: demo-files in the repository).",
+    )
+    demo.add_argument(
+        "--corpus",
+        type=Path,
+        default=EVALUATION_DIR / "corpus",
+        help="Corpus sources (default: evals/corpus).",
+    )
     arguments = parser.parse_args(argv)
     if arguments.command == "download-embedding-model":
         return download_embedding_model(get_settings())
@@ -265,6 +311,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return evaluate(get_settings(), arguments)
     if arguments.command == "compare-results":
         return compare_results(arguments)
+    if arguments.command == "write-demo-files":
+        return write_demo_files(arguments)
     return 2
 
 

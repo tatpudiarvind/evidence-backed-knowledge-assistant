@@ -5,6 +5,7 @@ import json
 import sys
 import types
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from sqlalchemy import make_url
 from app import cli
 from app.core.config import Settings
 from app.domain.indexing import EMBEDDING_DIMENSION
+from app.evaluation.corpus import load_corpus, read_blocks
 from app.evaluation.dataset import questions_sha256
 from app.providers.embeddings import EmbeddingUnavailableError
 from tests.support import (
@@ -156,6 +158,63 @@ def test_main_needs_a_command(capsys: pytest.CaptureFixture[str]) -> None:
     assert "download-embedding-model" in error
     assert "evaluate" in error
     assert "compare-results" in error
+    assert "write-demo-files" in error
+
+
+def test_demo_files_are_the_evaluation_documents_as_uploads(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "demo"
+
+    assert cli.main(["write-demo-files", "--output", str(output)]) == 0
+
+    corpus = load_corpus(cli.EVALUATION_DIR / "corpus")
+    assert sorted(path.name for path in output.iterdir()) == sorted(doc.name for doc in corpus)
+    written = [replace(doc, content=(output / doc.name).read_bytes()) for doc in corpus]
+    signatures = {".pdf": b"%PDF-", ".docx": b"PK\x03\x04", ".txt": b""}
+    for document in written:
+        assert document.content.startswith(signatures[Path(document.name).suffix])
+    # The app reads the same text from them as from the documents the evaluation indexes.
+    settings = make_settings()
+    assert read_blocks(written, settings) == read_blocks(corpus, settings)
+    assert f"Wrote {len(corpus)} synthetic documents to {output}." in capsys.readouterr().out
+
+
+def test_demo_files_replace_files_of_the_same_name(tmp_path: Path) -> None:
+    (tmp_path / "volunteer-faq.txt").write_bytes(b"An older copy.\n")
+    (tmp_path / "notes.txt").write_bytes(b"Someone else's file.\n")
+
+    assert cli.main(["write-demo-files", "--output", str(tmp_path)]) == 0
+
+    assert b"front desk" in (tmp_path / "volunteer-faq.txt").read_bytes()
+    assert (tmp_path / "notes.txt").read_bytes() == b"Someone else's file.\n"
+
+
+def test_demo_files_report_a_corpus_that_cannot_be_read(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "demo"
+
+    assert (
+        cli.main(
+            ["write-demo-files", "--corpus", str(tmp_path / "missing"), "--output", str(output)]
+        )
+        == 1
+    )
+
+    assert "Can't build the demo files: " in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_demo_files_report_a_folder_that_cannot_be_written(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "demo"
+    output.write_bytes(b"A file where the folder would go.\n")
+
+    assert cli.main(["write-demo-files", "--output", str(output)]) == 1
+
+    assert "Can't write the demo files: " in capsys.readouterr().err
 
 
 class DescribedModel(ScriptedLanguageModel):
