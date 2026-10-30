@@ -155,6 +155,7 @@ def test_main_needs_a_command(capsys: pytest.CaptureFixture[str]) -> None:
     error = capsys.readouterr().err
     assert "download-embedding-model" in error
     assert "evaluate" in error
+    assert "compare-results" in error
 
 
 class DescribedModel(ScriptedLanguageModel):

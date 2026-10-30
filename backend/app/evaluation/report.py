@@ -4,11 +4,13 @@ Timings depend on the computer and on whatever else it was doing, so the file ke
 median and maximum, never a single question's.
 """
 
+import difflib
 import json
 import statistics
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from app.domain.questions import AnswerMode
 from app.evaluation.runner import EvaluationRun, QuestionResult
@@ -27,6 +29,16 @@ from app.evaluation.scoring import (
 )
 
 FORMAT_VERSION = 1
+# What `compare_reports` compares besides the summary: the data and the settings.
+_COMPARED_SECTIONS = ("data", "config")
+# Generated DOCX files are zip archives, so their size depends on the zlib build: the same text
+# made 36,742 bytes on Python 3.14 for Windows (zlib-ng) and 38,084 on 3.12 (zlib 1.3.2).
+_UNCOMPARED_KEYS = frozenset({"size_bytes"})
+_MISSING = object()
+
+
+class ReportError(Exception):
+    """A results file that can't be read, or isn't in this version's format."""
 
 
 def build_report(
@@ -123,6 +135,16 @@ def write_report(path: Path, report: Json) -> None:
     path.write_bytes((json.dumps(report, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
 
 
+def read_report(path: Path) -> Json:
+    try:
+        report = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, ValueError) as error:
+        raise ReportError(f"Can't read {path}: {error}") from error
+    if not isinstance(report, dict) or report.get("format_version") != FORMAT_VERSION:
+        raise ReportError(f"{path} isn't a results file in format {FORMAT_VERSION}.")
+    return report
+
+
 def summary_lines(report: Json) -> list[str]:
     """A few lines on what the results file holds, for the terminal."""
     data = report["data"]
@@ -187,6 +209,29 @@ def summary_lines(report: Json) -> list[str]:
     return lines
 
 
+def compare_reports(expected: Json, actual: Json) -> list[str]:
+    """How two results files differ, one line each; none if they agree.
+
+    Runs of the same code, data, and settings should agree on the data, the settings, and the
+    summary, on any computer. Timings and the environment aren't compared, nor is each
+    question's detail, whose scores can differ in the last decimal place between computers.
+    """
+    differences: list[str] = []
+    for section in _COMPARED_SECTIONS:
+        before = _leaves(expected[section], section)
+        after = _leaves(actual[section], section)
+        for path in [*before, *(path for path in after if path not in before)]:
+            old, new = before.get(path, _MISSING), after.get(path, _MISSING)
+            if old != new:
+                differences.append(f"{path}: {_shown(old)} != {_shown(new)}")
+    differences.extend(
+        difflib.unified_diff(
+            summary_lines(expected), summary_lines(actual), "expected", "actual", n=0, lineterm=""
+        )
+    )
+    return differences
+
+
 def _question(result: QuestionResult, top_k: int) -> Json:
     retrieval = result.retrieval
     question = retrieval.question
@@ -214,3 +259,22 @@ def _seconds(values: Sequence[float]) -> Json:
 
 def _fraction(value: Json) -> str:
     return f"{value['count']}/{value['of']}"
+
+
+def _leaves(value: Any, path: str) -> dict[str, Any]:
+    """A JSON value's single values by their path, such as `data.documents.0.chunks`."""
+    if isinstance(value, dict):
+        items = list(value.items())
+    elif isinstance(value, list):
+        items = list(enumerate(value))
+    else:
+        return {path: value}
+    leaves: dict[str, Any] = {}
+    for key, item in items:
+        if key not in _UNCOMPARED_KEYS:
+            leaves.update(_leaves(item, f"{path}.{key}"))
+    return leaves
+
+
+def _shown(value: Any) -> str:
+    return "(missing)" if value is _MISSING else json.dumps(value, ensure_ascii=False)

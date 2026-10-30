@@ -173,6 +173,33 @@ def evaluate(settings: Settings, arguments: argparse.Namespace) -> int:
     return 0
 
 
+def compare_results(arguments: argparse.Namespace) -> int:
+    """Compare two results files: 0 if they agree, 1 if they differ, 2 if one can't be read."""
+    from app.evaluation.report import ReportError, compare_reports, read_report
+
+    try:
+        differences = compare_reports(
+            read_report(arguments.expected), read_report(arguments.actual)
+        )
+    except ReportError as error:
+        print(error, file=sys.stderr)
+        return 2
+    except (KeyError, TypeError, AttributeError) as error:
+        print(
+            f"The results files can't be compared: one is incomplete "
+            f"({type(error).__name__}: {error}).",
+            file=sys.stderr,
+        )
+        return 2
+    if not differences:
+        print("The results agree on the data, the settings, and the summary.")
+        return 0
+    print(f"{arguments.actual} differs from {arguments.expected}:")
+    for difference in differences:
+        print(f"  {difference}")
+    return 1
+
+
 def _first_line(error: SQLAlchemyError) -> str:
     """A database error's own message, without the statement and parameters SQLAlchemy adds."""
     cause = getattr(error, "orig", None) or error
@@ -220,11 +247,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=EVALUATION_DIR / "corpus",
         help="Corpus sources (default: evals/corpus).",
     )
+    comparison = commands.add_parser(
+        "compare-results",
+        help="Check two evaluation results files agree, apart from timings and the computer.",
+        description=(
+            "Compare two results files on the data, the settings, and the summary; timings, the "
+            "environment, and each question's scores aren't compared. Exits with 1 if they "
+            "differ, and 2 if a file can't be read."
+        ),
+    )
+    comparison.add_argument("expected", type=Path, help="Results to compare with.")
+    comparison.add_argument("actual", type=Path, help="Results to check.")
     arguments = parser.parse_args(argv)
     if arguments.command == "download-embedding-model":
         return download_embedding_model(get_settings())
     if arguments.command == "evaluate":
         return evaluate(get_settings(), arguments)
+    if arguments.command == "compare-results":
+        return compare_results(arguments)
     return 2
 
 

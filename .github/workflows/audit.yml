@@ -1,0 +1,56 @@
+name: Dependency audit
+
+# Checks the locked Python and npm packages against published advisories: on every push, and
+# weekly, as new advisories appear even when the code doesn't change.
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "37 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install uv and pip-audit
+        run: python -m pip install uv==0.13.5 pip-audit==2.10.1
+      - name: List the locked versions
+        # Without environment markers and local version labels such as +cpu, which pip-audit
+        # can't look up, and then without the duplicates that leaves: torch is locked twice.
+        run: |
+          uv export --frozen --extra dev --no-emit-project --no-hashes --format requirements-txt \
+            | grep -E '^[A-Za-z0-9]' \
+            | sed -E 's/;.*$//; s/[[:space:]]+$//; s/\+[A-Za-z0-9.]+$//' \
+            | sort -u > "$RUNNER_TEMP/requirements.txt"
+          echo "$(wc -l < "$RUNNER_TEMP/requirements.txt") packages to audit"
+      - name: Audit
+        run: pip-audit -r "$RUNNER_TEMP/requirements.txt" --no-deps --disable-pip --progress-spinner off
+
+  npm:
+    name: npm packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Audit
+        # Reads package-lock.json; nothing is installed.
+        run: npm audit --registry=https://registry.npmjs.org/

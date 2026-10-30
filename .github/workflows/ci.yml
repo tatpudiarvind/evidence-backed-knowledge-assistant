@@ -63,6 +63,20 @@ jobs:
           exit 1
       - name: Test
         run: uv run --no-sync pytest
+      - name: Evaluate retrieval
+        # The documented evaluation, in a database of its own (knowledge_assistant_eval).
+        run: uv run --no-sync python -m app.cli evaluate --output "$RUNNER_TEMP/evaluation/retrieval-only.json"
+      - name: Keep the evaluation results
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrieval-only-results
+          path: ${{ runner.temp }}/evaluation/retrieval-only.json
+          if-no-files-found: error
+      - name: Compare with the committed results
+        # Fails when the results in the repository no longer match what the code measures.
+        run: >-
+          uv run --no-sync python -m app.cli compare-results
+          ../evals/results/retrieval-only.json "$RUNNER_TEMP/evaluation/retrieval-only.json"
 
   frontend:
     runs-on: ubuntu-24.04
