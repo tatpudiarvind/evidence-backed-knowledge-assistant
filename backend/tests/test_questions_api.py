@@ -11,7 +11,6 @@ import re
 import time
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -25,18 +24,17 @@ from app.domain.indexing import EMBEDDING_DIMENSION
 from app.domain.questions import AbstentionReason, AnswerMode, AnswerRecord
 from app.providers.embeddings import EmbeddingUnavailableError
 from app.repositories import questions as question_repository
-from tests.conftest import AppFactory
 from tests.support import (
     CSRF_HEADERS,
     HashingEmbeddings,
     Heading,
     ScriptedLanguageModel,
+    Workspace,
     ask,
     create_workspace,
     docx_bytes,
     error_code,
     hashed_vector,
-    index_queued_documents,
     pdf_bytes,
     register,
     upload,
@@ -51,52 +49,6 @@ MEETING_QUESTION = "When do team meetings start on Mondays?"
 UNRELATED_QUESTION = "Which train leaves first tomorrow morning?"
 WAIT_SECONDS = 10
 DECLINED = {"mode": "search_only", "text": None, "abstained": True, "model_name": None}
-
-
-@dataclass
-class Workspace:
-    """A signed-in user's workspace, in an app whose background workers are off."""
-
-    app: FastAPI
-    client: TestClient
-    id: str
-
-    def add(self, filename: str, content: bytes) -> str:
-        """Upload a document and index it, as the background worker would."""
-        response = upload(self.client, self.id, filename, content)
-        assert response.status_code == 202, response.text
-        index_queued_documents(self.app)
-        document_id: str = response.json()["id"]
-        return document_id
-
-    def ask(self, question: str) -> dict[str, Any]:
-        response = ask(self.client, self.id, question)
-        assert response.status_code == 201, response.text
-        body: dict[str, Any] = response.json()
-        return body
-
-    def history(self) -> list[dict[str, Any]]:
-        response = self.client.get(f"/api/v1/workspaces/{self.id}/questions")
-        assert response.status_code == 200, response.text
-        items: list[dict[str, Any]] = response.json()["items"]
-        return items
-
-    def delete(self, document_id: str) -> None:
-        response = self.client.delete(f"/api/v1/documents/{document_id}", headers=CSRF_HEADERS)
-        assert response.status_code == 204, response.text
-
-
-@pytest.fixture
-def make_workspace(
-    make_db_app: AppFactory, make_client: Callable[[FastAPI], TestClient]
-) -> Callable[..., Workspace]:
-    def factory(**overrides: Any) -> Workspace:
-        app = make_db_app(**overrides)
-        client = make_client(app)
-        assert register(client).status_code == 201
-        return Workspace(app, client, create_workspace(client)["id"])
-
-    return factory
 
 
 def ids(questions: Sequence[dict[str, Any]]) -> list[str]:

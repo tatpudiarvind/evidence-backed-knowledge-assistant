@@ -175,6 +175,19 @@ def test_line_breaks_are_kept() -> None:
 
 
 @pytest.mark.parametrize(
+    "invisible",
+    ["\x00", "\x07", "\u200b", "\u202e", "\ud800"],
+    ids=["nul", "bell", "zero-width-space", "direction-override", "lone-surrogate"],
+)
+def test_replies_lose_characters_that_cannot_be_stored_or_seen(invisible: str) -> None:
+    # Removed before citations are read, so one can't hide inside a citation either.
+    checked = check_answer(f"Kept{invisible} seven years [S{invisible}1].", [A])
+
+    assert checked.text == "Kept seven years [1]."
+    assert checked.cited == (A,)
+
+
+@pytest.mark.parametrize(
     "reply",
     [
         INSUFFICIENT_EVIDENCE_REPLY,

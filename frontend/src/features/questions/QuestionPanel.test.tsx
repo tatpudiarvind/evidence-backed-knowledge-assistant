@@ -168,6 +168,36 @@ describe("QuestionPanel", () => {
     );
   });
 
+  it("shows markup in questions, answers, and sources as plain text", async () => {
+    const markup =
+      '<img src="x" onerror="alert(1)"><script>alert(2)</script><iframe src="https://example.invalid"></iframe>';
+    const question = `What does ${markup} do?`;
+    const answerText = `It does nothing ${markup} [click here](javascript:alert(3)) [1].`;
+    const documentName = `${markup}.pdf`;
+    const excerpt = `A passage with ${markup} in it.`;
+    installFetch({
+      [HISTORY]: listOf(
+        questionJson(
+          { text: question },
+          { text: answerText, citations: [citationJson({ document_name: documentName, excerpt })] },
+        ),
+      ),
+    });
+    renderPanel();
+
+    const item = await findQuestionItem(question);
+
+    expect(item.querySelector("img, script, iframe")).toBeNull();
+    expect(item.querySelector(".question-text")?.textContent).toBe(question);
+    expect(item.querySelector(".answer-text")?.textContent).toBe(answerText);
+    expect(item.querySelector(".source-name")?.textContent).toBe(`Source 1: ${documentName}`);
+    expect(item.querySelector(".source-excerpt blockquote")?.textContent).toBe(excerpt);
+    // The only link is the citation's, to its source in the list below.
+    expect(within(item).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual([
+      "#source-q-1-1",
+    ]);
+  });
+
   it.each([
     {
       reason: "no model is set up",

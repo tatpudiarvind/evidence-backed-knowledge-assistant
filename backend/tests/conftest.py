@@ -26,7 +26,13 @@ from app.db.maintenance import create_database_if_missing, empty_tables, run_ale
 from app.factory import create_app
 from app.providers.embeddings import EmbeddingProvider
 from app.providers.llm import LanguageModel
-from tests.support import HashingEmbeddings, make_settings
+from tests.support import (
+    HashingEmbeddings,
+    Workspace,
+    create_workspace,
+    make_settings,
+    register,
+)
 
 DEFAULT_TEST_DATABASE_URL = "postgresql+psycopg://knowledge_assistant:local_dev_only@127.0.0.1:5432/knowledge_assistant_test"
 # The cheapest Argon2 parameters keep tests fast; the app itself uses the library defaults.
@@ -120,5 +126,20 @@ def make_client() -> Callable[[FastAPI], TestClient]:
 
     def factory(app: FastAPI) -> TestClient:
         return TestClient(app, raise_server_exceptions=False)
+
+    return factory
+
+
+@pytest.fixture
+def make_workspace(
+    make_db_app: AppFactory, make_client: Callable[[FastAPI], TestClient]
+) -> Callable[..., Workspace]:
+    """Builds a database-backed app, signs a new user in, and gives them a workspace."""
+
+    def factory(**overrides: Any) -> Workspace:
+        app = make_db_app(**overrides)
+        client = make_client(app)
+        assert register(client).status_code == 201
+        return Workspace(app, client, create_workspace(client)["id"])
 
     return factory

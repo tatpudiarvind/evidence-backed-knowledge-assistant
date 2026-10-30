@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from app.domain.indexing import normalize_text
 from app.domain.questions import AbstentionReason, Passage
 
 # What the model is told to reply when the passages don't answer the question.
@@ -111,11 +112,14 @@ def build_prompt(
 def check_answer(reply: str, sources: Sequence[Passage]) -> CheckedAnswer:
     """Keep a model's reply only if it answers the question and cites at least one source.
 
-    Citations of sources the model wasn't given are removed. The rest are renumbered [1], [2],
-    and so on, in the order they first appear, so the numbers match the stored citations. A
-    reply that says the evidence is insufficient anywhere counts as declining to answer.
+    The reply is tidied like document text first. That removes characters PostgreSQL can't
+    store (NUL, lone surrogates) and invisible ones that would change how the answer reads, such
+    as direction overrides. Citations of sources the model wasn't given are removed. The rest are
+    renumbered [1], [2], and so on, in the order they first appear, so the numbers match the
+    stored citations. A reply that says the evidence is insufficient anywhere counts as
+    declining to answer.
     """
-    reply = reply[:MAX_REPLY_LENGTH]
+    reply = normalize_text(reply[:MAX_REPLY_LENGTH])
     if _INSUFFICIENT.search(reply) or _SPELLED_OUT_INSUFFICIENT.fullmatch(reply):
         return CheckedAnswer(None, (), AbstentionReason.INSUFFICIENT_EVIDENCE)
 

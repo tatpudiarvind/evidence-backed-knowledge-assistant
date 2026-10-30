@@ -6,6 +6,7 @@ import math
 import re
 import zipfile
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -209,3 +210,36 @@ def ask(client: TestClient, workspace_id: str, text: str) -> Response:
     return client.post(
         f"/api/v1/workspaces/{workspace_id}/questions", json={"text": text}, headers=CSRF_HEADERS
     )
+
+
+@dataclass
+class Workspace:
+    """A signed-in user's workspace, in an app whose background workers are off."""
+
+    app: FastAPI
+    client: TestClient
+    id: str
+
+    def add(self, filename: str, content: bytes) -> str:
+        """Upload a document and index it, as the background worker would."""
+        response = upload(self.client, self.id, filename, content)
+        assert response.status_code == 202, response.text
+        index_queued_documents(self.app)
+        document_id: str = response.json()["id"]
+        return document_id
+
+    def ask(self, question: str) -> dict[str, Any]:
+        response = ask(self.client, self.id, question)
+        assert response.status_code == 201, response.text
+        body: dict[str, Any] = response.json()
+        return body
+
+    def history(self) -> list[dict[str, Any]]:
+        response = self.client.get(f"/api/v1/workspaces/{self.id}/questions")
+        assert response.status_code == 200, response.text
+        items: list[dict[str, Any]] = response.json()["items"]
+        return items
+
+    def delete(self, document_id: str) -> None:
+        response = self.client.delete(f"/api/v1/documents/{document_id}", headers=CSRF_HEADERS)
+        assert response.status_code == 204, response.text
