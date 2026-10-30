@@ -23,7 +23,7 @@ from sqlalchemy.exc import OperationalError
 from alembic import command
 from app.core.security import PasswordHashing
 from app.db.maintenance import create_database_if_missing, empty_tables, run_alembic
-from app.main import create_app
+from app.factory import create_app
 from app.providers.embeddings import EmbeddingProvider
 from app.providers.llm import LanguageModel
 from tests.support import HashingEmbeddings, make_settings

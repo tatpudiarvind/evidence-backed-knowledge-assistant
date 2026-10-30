@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
+from app.core.metrics import Metrics
 from app.domain.documents import DocumentStatus
 from app.domain.indexing import (
     IndexingError,
@@ -48,10 +49,13 @@ class DocumentIndexer:
         storage: DocumentStorage,
         embeddings: EmbeddingProvider,
         settings: Settings,
+        *,
+        metrics: Metrics | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._storage = storage
         self._embeddings = embeddings
+        self._metrics = metrics
         self._limits = ParseLimits(
             max_pages=settings.max_document_pages,
             max_characters=settings.max_document_characters,
@@ -96,7 +100,7 @@ class DocumentIndexer:
             logger.warning(
                 "Indexing document %s failed: %s%s", job.document_id, error.failure.value, cause
             )
-            self._mark_failed(job.document_id, error)
+            self._fail(job.document_id, error)
             return
         except Exception as error:
             logger.warning(
@@ -106,8 +110,9 @@ class DocumentIndexer:
             )
             # Error messages can quote a document, so the details are only logged on request.
             logger.debug("Indexing failure details", exc_info=True)
-            self._mark_failed(job.document_id, IndexingError(IndexingFailure.INGESTION_FAILED))
+            self._fail(job.document_id, IndexingError(IndexingFailure.INGESTION_FAILED))
             return
+        self._count("indexed" if saved else "discarded")
         if saved:
             logger.info(
                 "Indexed document %s: %d chunks in %.1f s",
@@ -162,12 +167,22 @@ class DocumentIndexer:
             session.commit()
         return True
 
-    def _mark_failed(self, document_id: uuid.UUID, error: IndexingError) -> None:
+    def _fail(self, document_id: uuid.UUID, error: IndexingError) -> None:
+        marked = self._mark_failed(document_id, error)
+        self._count(error.failure.value if marked else "discarded")
+
+    def _count(self, outcome: str) -> None:
+        if self._metrics is not None:
+            self._metrics.count_indexing(outcome)
+
+    def _mark_failed(self, document_id: uuid.UUID, error: IndexingError) -> bool:
+        """Returns False, changing nothing, if the document was deleted or changed meanwhile."""
         with self._session_factory() as session:
             document = document_repository.get_by_id(session, document_id, lock=True)
             if document is None or document.status != DocumentStatus.PROCESSING:
-                return
+                return False
             document.status = DocumentStatus.FAILED.value
             document.failure_code = error.failure.value
             document.failure_message = error.message
             session.commit()
+        return True

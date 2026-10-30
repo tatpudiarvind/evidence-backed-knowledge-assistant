@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     database_connect_timeout_seconds: int = Field(default=3, ge=1)
     cors_origins: list[str] = ["http://localhost:5173"]
 
+    # Logs and metrics (Phase 5). The API logs to standard error, as text or as one JSON object
+    # per line. DEBUG adds the details of unexpected indexing errors, which can quote documents.
+    log_format: Literal["text", "json"] = "text"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    # Serves the metrics at /metrics, where anyone who can reach the API can read them.
+    metrics_enabled: bool = False
+
     # Local accounts (D-32). Turn registration off once the accounts you need exist.
     registration_enabled: bool = True
     session_lifetime_hours: int = Field(default=12, ge=1, le=720)
@@ -105,6 +112,11 @@ class Settings(BaseSettings):
             if not origin.startswith(("http://", "https://")) or "*" in origin:
                 raise ValueError("CORS origins must be explicit http:// or https:// origins")
         return origins
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _upper_case_log_level(cls, level: object) -> object:
+        return level.upper() if isinstance(level, str) else level
 
     @field_validator("ollama_base_url")
     @classmethod

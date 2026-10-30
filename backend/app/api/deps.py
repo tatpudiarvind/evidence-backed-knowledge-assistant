@@ -1,5 +1,5 @@
-"""Request dependencies: settings, database session, storage, models, the signed-in user, and
-rate limits."""
+"""Request dependencies: settings, database session, storage, models, metrics, the signed-in
+user, and rate limits."""
 
 from collections.abc import Iterator
 from typing import Annotated
@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.core.metrics import Metrics
 from app.core.rate_limits import RateLimits, SlidingWindowLimiter, format_wait
 from app.core.security import PasswordHashing
 from app.db.models import User
@@ -63,6 +64,11 @@ async def get_language_model(request: Request) -> LanguageModel | None:
     return language_model
 
 
+async def get_metrics(request: Request) -> Metrics:
+    metrics: Metrics = request.app.state.metrics
+    return metrics
+
+
 def get_db(request: Request) -> Iterator[Session]:
     session_factory: sessionmaker[Session] = request.app.state.session_factory
     with session_factory() as session:
@@ -75,6 +81,7 @@ PasswordsDep = Annotated[PasswordHashing, Depends(get_passwords)]
 IngestionWorkerDep = Annotated[IngestionWorker, Depends(get_ingestion_worker)]
 EmbeddingsDep = Annotated[EmbeddingProvider, Depends(get_embeddings)]
 LanguageModelDep = Annotated[LanguageModel | None, Depends(get_language_model)]
+MetricsDep = Annotated[Metrics, Depends(get_metrics)]
 DbSession = Annotated[Session, Depends(get_db)]
 SessionToken = Annotated[str | None, Depends(session_cookie)]
 

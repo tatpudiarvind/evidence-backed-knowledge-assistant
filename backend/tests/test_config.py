@@ -76,6 +76,27 @@ def test_rate_limits_are_on_by_default() -> None:
     assert config.Settings.model_fields["rate_limits_enabled"].default is True
 
 
+def test_logs_are_text_at_info_and_metrics_are_not_served_by_default() -> None:
+    fields = config.Settings.model_fields
+    assert fields["log_format"].default == "text"
+    assert fields["log_level"].default == "INFO"
+    assert fields["metrics_enabled"].default is False
+
+
+@pytest.mark.parametrize("level", ["debug", "Warning", "ERROR"])
+def test_log_levels_are_accepted_in_any_case(level: str) -> None:
+    assert make_settings(log_level=level).log_level == level.upper()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"log_level": "TRACE"}, {"log_level": ""}, {"log_format": "xml"}, {"log_format": "JSON"}],
+)
+def test_unknown_log_settings_are_rejected(overrides: dict[str, str]) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(**overrides)
+
+
 def test_chunk_overlap_is_at_most_a_quarter_of_the_chunk_size() -> None:
     settings = make_settings(chunk_size_characters=1000, chunk_overlap_characters=250)
     assert settings.chunk_overlap_characters == 250

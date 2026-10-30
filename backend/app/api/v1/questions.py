@@ -9,6 +9,7 @@ from app.api.deps import (
     DbSession,
     EmbeddingsDep,
     LanguageModelDep,
+    MetricsDep,
     SettingsDep,
     limit_questions,
 )
@@ -47,6 +48,7 @@ def ask_question(
     settings: SettingsDep,
     embeddings: EmbeddingsDep,
     language_model: LanguageModelDep,
+    metrics: MetricsDep,
 ) -> QuestionOut:
     record = question_service.ask_question(
         session,
@@ -57,6 +59,7 @@ def ask_question(
         embeddings=embeddings,
         language_model=language_model,
     )
+    metrics.count_answer(record.answer)
     return _question_out(record)
 
 

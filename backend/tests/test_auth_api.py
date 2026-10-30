@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from app.core.security import PasswordHashing, hash_session_token
-from app.main import create_app
+from app.factory import create_app
 from tests.support import (
     CSRF_HEADERS,
     DEFAULT_PASSWORD,

@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx2 import Response
+from prometheus_client.parser import text_string_to_metric_families
 from pypdf import PdfReader, PdfWriter
 
 from app.core.config import Settings
@@ -154,12 +155,31 @@ def index_queued_documents(app: FastAPI) -> int:
     """Index every queued document now, as the background worker would. Returns how many."""
     state = app.state
     indexer = DocumentIndexer(
-        state.session_factory, state.storage, state.embeddings, state.settings
+        state.session_factory,
+        state.storage,
+        state.embeddings,
+        state.settings,
+        metrics=state.metrics,
     )
     count = 0
     while indexer.process_next():
         count += 1
     return count
+
+
+def sample_value(exposition: str, name: str, **labels: str) -> float | None:
+    """A sample's value in metrics in Prometheus's text format, or None if there's none."""
+    for family in text_string_to_metric_families(exposition):
+        for sample in family.samples:
+            if sample.name == name and sample.labels == labels:
+                return float(sample.value)
+    return None
+
+
+def metric_value(app: FastAPI, name: str, **labels: str) -> float | None:
+    """A sample's value in an app's metrics, whether or not /metrics serves them."""
+    body, _ = app.state.metrics.exposition("")
+    return sample_value(body.decode(), name, **labels)
 
 
 class ScriptedLanguageModel:

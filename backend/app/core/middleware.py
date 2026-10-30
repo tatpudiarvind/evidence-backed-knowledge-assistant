@@ -1,12 +1,17 @@
 import logging
 import re
+import time
 import uuid
 
+from fastapi.routing import RouteContext, iter_route_contexts
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.responses import JSONResponse
+from starlette.routing import Match
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.errors import INTERNAL_ERROR_MESSAGE, error_content
+from app.core.logs import current_request_id
+from app.core.metrics import Metrics
 
 REQUEST_ID_HEADER = "X-Request-ID"
 # The largest request body read into memory. Every JSON body the API accepts fits, even with
@@ -14,14 +19,22 @@ REQUEST_ID_HEADER = "X-Request-ID"
 MAX_REQUEST_BODY_BYTES = 64 * 1024
 # Uploads stream to disk under their own size and time limits (D-33).
 _UPLOAD_PATH = re.compile(r"/api/v1/workspaces/[^/]+/documents")
+# How the access log and the metrics name a request whose path matches no route.
+NO_ROUTE = "(no route)"
+# Health checks and metric scrapes come often, so their requests are logged only at DEBUG.
+_QUIET_ROUTES = frozenset({"/health/live", "/health/ready", "/metrics"})
+# Other methods are logged and counted as OTHER, so clients can't add label values at will.
+_KNOWN_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 
 logger = logging.getLogger("app.errors")
+access_logger = logging.getLogger("app.access")
 
 
 class RequestIdMiddleware:
     """Gives every HTTP request a new random ID, returned in a header and in error bodies.
 
-    Incoming request ID headers are ignored, so clients can't put arbitrary text in logs.
+    The ID is also current while the request is handled, so log lines carry it. Incoming
+    request ID headers are ignored, so clients can't put arbitrary text in logs.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -40,7 +53,85 @@ class RequestIdMiddleware:
                 MutableHeaders(scope=message)[REQUEST_ID_HEADER] = request_id
             await send(message)
 
-        await self.app(scope, receive, send_with_request_id)
+        token = current_request_id.set(request_id)
+        try:
+            await self.app(scope, receive, send_with_request_id)
+        finally:
+            current_request_id.reset(token)
+
+
+class AccessLogMiddleware:
+    """Logs one line per request, and counts it in the metrics.
+
+    A request is named by its method and its route's template, such as
+    `GET /api/v1/workspaces/{workspace_id}/documents`, so neither the lines nor the metrics
+    hold IDs, query strings, or anything else a client puts in a URL. Client addresses are
+    left out too.
+    """
+
+    def __init__(self, app: ASGIApp, metrics: Metrics) -> None:
+        self.app = app
+        self.metrics = metrics
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        started = time.perf_counter()
+        method = scope["method"] if scope["method"] in _KNOWN_METHODS else "OTHER"
+        route = route_template(scope)
+        status: int | None = None
+
+        async def send_tracking_status(message: Message) -> None:
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_tracking_status)
+        finally:
+            seconds = time.perf_counter() - started
+            self.metrics.count_request(method, route, status, seconds)
+            access_logger.log(
+                logging.DEBUG if route in _QUIET_ROUTES else logging.INFO,
+                "%s %s %s %.1f ms",
+                method,
+                route,
+                "no response" if status is None else status,
+                seconds * 1000,
+                extra={
+                    "method": method,
+                    "route": route,
+                    "status": status,
+                    "duration_ms": round(seconds * 1000, 1),
+                },
+            )
+
+
+def route_template(scope: Scope) -> str:
+    """The template of the route a request is for, such as `/api/v1/workspaces/{workspace_id}`.
+
+    The route is found the way the router finds it: the first one that takes the request's
+    method, or else the first one with its path. So requests answered before routing, such as
+    CORS preflights and oversized bodies, are named too. FastAPI's `scope["route"]` isn't used:
+    for a route from an included router, its path lacks the router's prefix.
+    """
+    routes = getattr(getattr(scope.get("app"), "router", None), "routes", None)
+    same_path: str | None = None
+    for route in iter_route_contexts(routes or ()):
+        match, _ = route.matches(scope)
+        if match is Match.FULL:
+            return _path_template(route)
+        if match is Match.PARTIAL and same_path is None:
+            same_path = _path_template(route)
+    return same_path or NO_ROUTE
+
+
+def _path_template(route: RouteContext) -> str:
+    path = route.path_format or route.path
+    return path if isinstance(path, str) else NO_ROUTE
 
 
 class UnhandledErrorMiddleware:
@@ -70,10 +161,10 @@ class UnhandledErrorMiddleware:
         except Exception:
             request_id = scope.get("state", {}).get("request_id")
             logger.exception(
-                "Unhandled error (request_id=%s, method=%s, path=%s)",
+                "Unhandled error (request_id=%s, method=%s, route=%s)",
                 request_id,
                 scope.get("method"),
-                scope.get("path"),
+                route_template(scope),
             )
             if response_started:
                 raise

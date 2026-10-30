@@ -34,6 +34,7 @@ from tests.support import (
     encrypted_pdf_bytes,
     hashed_vector,
     index_queued_documents,
+    metric_value,
     pdf_bytes,
     register,
     stored_files,
@@ -45,6 +46,7 @@ pytestmark = pytest.mark.integration
 
 SECRET_TEXT = "Synthetic confidential sentence that must never reach the logs."
 WAIT_SECONDS = 10
+PROCESSED = "knowledge_assistant_documents_processed_total"
 
 
 @dataclass
@@ -139,6 +141,7 @@ def test_text_files_become_ready_with_one_chunk(library: Library) -> None:
     assert document["status"] == "ready"
     assert document["failure_code"] is None
     assert document["failure_message"] is None
+    assert metric_value(library.app, PROCESSED, outcome="indexed") == 1
     [chunk] = library.chunks(document_id)
     assert (chunk.ordinal, chunk.text, chunk.page_number, chunk.section) == (
         0,
@@ -234,6 +237,7 @@ def _assert_failed(library: Library, document_id: str, failure: IndexingFailure)
     assert (document["status"], document["failure_code"]) == ("failed", failure.value)
     assert document["failure_message"] == FAILURE_MESSAGES[failure]
     assert library.chunks(document_id) == []
+    assert metric_value(library.app, PROCESSED, outcome=failure.value) == 1
 
 
 @pytest.mark.parametrize(
@@ -399,12 +403,32 @@ def test_documents_deleted_while_being_indexed_are_left_alone(
     library.index()
 
     assert library.chunks(document_id) == []
+    assert metric_value(library.app, PROCESSED, outcome="discarded") == 1
     if delete_completes:
         assert library.client.get(f"/api/v1/documents/{document_id}").status_code == 404
         assert stored_files(storage_dir) == []
     else:
         assert library.document(document_id)["status"] == "deleting"
         assert library.delete(document_id) == 204
+
+
+def test_documents_deleted_while_their_indexing_fails_count_as_discarded(
+    make_library: Callable[..., Library],
+) -> None:
+    embeddings = ControlledEmbeddings()
+    embeddings.available = False
+    library = make_library(embeddings=embeddings)
+    document_id = library.upload("notes.txt", b"Synthetic text.")
+
+    def delete_document() -> None:
+        assert library.delete(document_id) == 204
+
+    embeddings.before = delete_document
+    library.index()
+
+    assert library.client.get(f"/api/v1/documents/{document_id}").status_code == 404
+    assert metric_value(library.app, PROCESSED, outcome="discarded") == 1
+    assert metric_value(library.app, PROCESSED, outcome="embedding_unavailable") is None
 
 
 def test_deleting_an_indexed_document_deletes_its_chunks(library: Library) -> None:
