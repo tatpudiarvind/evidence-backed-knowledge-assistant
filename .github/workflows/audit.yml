@@ -40,12 +40,17 @@ jobs:
         run: pip-audit -r "$RUNNER_TEMP/requirements.txt" --no-deps --disable-pip --progress-spinner off
 
   npm:
-    name: npm packages
+    name: npm packages (${{ matrix.package }})
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # The app, and the tools that test it end to end.
+        package: [frontend, e2e]
     defaults:
       run:
-        working-directory: frontend
+        working-directory: ${{ matrix.package }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7

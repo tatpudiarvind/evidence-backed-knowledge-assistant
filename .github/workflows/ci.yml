@@ -344,16 +344,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
       - name: Install the end-to-end test tools
         working-directory: e2e
-        # There is no lock file yet; this makes the first one, which the next step keeps.
-        run: npm install --no-audit --no-fund
-      - name: Keep the lock file
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-package-lock
-          path: e2e/package-lock.json
-          if-no-files-found: error
+        run: npm ci --no-audit --no-fund
       - name: Type check the end-to-end tests
         working-directory: e2e
         run: npm run typecheck
