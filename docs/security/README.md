@@ -156,6 +156,7 @@ The stack serves plain HTTP to this computer only. [Operations](../operations/RE
 
 - Versions are locked in `backend/uv.lock`, `frontend/package-lock.json`, and `e2e/package-lock.json`. CI installs exactly those versions, with `uv sync --locked` and `npm ci`.
 - The `Dependency audit` workflow (`.github/workflows/audit.yml`) checks the locked Python packages, development tools included, with pip-audit 2.10.1, and the web app's and the end-to-end tests' npm packages with `npm audit`. It runs on every push and pull request, every Monday at 06:37 UTC, and on demand. Its runs during Phase 6 found no known vulnerabilities.
+- `frontend/package.json` overrides minimatch, which only ESLint and typescript-eslint use, to 11.0.3. Every version below 11.0.1 has a moderate advisory (CVE-2026-118764), and those tools still ask for 10.x. Remove the override once they ask for 11.
 - The container images are pinned by tag: `python:3.12-slim`, `pgvector/pgvector:0.8.0-pg16`, and `nginxinc/nginx-unprivileged:1.30-alpine`.
 - The embedding model is pinned to a revision, downloaded once, and loaded from local files, with Hugging Face's offline mode and telemetry turned off.
 - Updates are made by hand. Nothing opens update pull requests automatically.
