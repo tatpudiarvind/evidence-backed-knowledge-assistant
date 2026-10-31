@@ -292,6 +292,7 @@ evidence-backed-knowledge-assistant/
   docs/                       # every project document, one folder per kind
     README.md                 # index of the documents
     specification/            # this specification
+    roadmap/                  # the plan for the later features, Phases 7 to 10
     architecture/             # how the code is built, with diagrams
     api/                      # every endpoint, the errors, and the limits
     security/                 # how accounts, workspaces, and documents are protected; known gaps
@@ -491,6 +492,8 @@ Limits: sign-in attempts and registrations are counted per network address (10 a
 
 ## 10. Implementation roadmap and definition of done
 
+Phases 7 to 10 are planned, not built. They take up four of the decisions deferred in §15, and the [roadmap](../roadmap/README.md) describes the design, the evaluation, and the risks of each.
+
 ### Phase 0 — Confirm environment and decisions
 - Check Python/Node/Docker versions and available memory/disk before choosing local model sizes.
 - Select an openly licensed, small sample corpus or create synthetic documents; record source and license.
@@ -527,6 +530,31 @@ Limits: sign-in attempts and registrations are counted per network address (10 a
 - **Done when:** an external reviewer can understand the architecture, run the app, inspect tests/evaluation, and reproduce the demo. Cloud deployment is optional; no permanent free tier is assumed.
 - **Outcome:** the production-style stack (`compose.prod.yaml`), in which nginx serves the built web app; end-to-end tests in `e2e/`, with automated accessibility checks, run against it in CI; demo files; the [screenshots](../screenshots/README.md); the [architecture](../architecture/README.md), [API](../api/README.md), [security](../security/README.md), and [operations](../operations/README.md) guides; and a list of limitations in the root `README.md`. The optional cloud deployment is deferred, so the app hasn't been deployed; the operations guide lists [what a real deployment adds](../operations/README.md#what-a-real-deployment-adds).
 
+### Phase 7 — Hybrid search and reranking (planned)
+- Add keyword search, with PostgreSQL's full-text search, next to the vector search; merge the two lists by reciprocal rank fusion; and optionally reorder the merged passages with a cross-encoder that runs on the CPU.
+- Use the same workspace scope and the same evidence threshold in every mode, and keep today's vector search as the default until an evaluation supports a change.
+- Write and freeze a new, reviewed question set, and fix the rule for choosing the default, before any run.
+- **Done when:** every mode has been measured on both question sets, the default has been chosen by the rule fixed in advance (keeping vector search is a valid result), and the tests pass locally and in CI.
+- **Plan:** [Phase 7 in the roadmap](../roadmap/README.md#phase-7--hybrid-search-and-reranking).
+
+### Phase 8 — A durable queue for indexing (planned)
+- Hold indexing work in a PostgreSQL `jobs` table, with leases, attempt counts, and retries with backoff; parse files in a child process that can be stopped at the time limit; and offer an optional worker process.
+- Add no new service (no Redis, Kafka, or other message broker), keep a single process by default, and keep the document statuses users see.
+- **Done when:** killing the worker while it indexes loses no document and saves no passage twice, a parser that hangs or crashes can't keep other documents waiting, and the queue's depth is in the metrics.
+- **Plan:** [Phase 8 in the roadmap](../roadmap/README.md#phase-8--a-durable-queue-for-indexing).
+
+### Phase 9 — A hosted language model (planned)
+- Add an adapter for OpenAI-compatible chat APIs behind the language-model interface, with the same prompt, limits, and citation check, built and tested against a local endpoint first.
+- Keep the local model as the default, record which provider wrote each answer, tell users before anything is sent to a hosted provider, and cap hosted calls per day.
+- **Done when:** the adapter passes its tests without a hosted account, answers record their provider, and a hosted evaluation has run only if the owner approved a vendor and its cost.
+- **Plan:** [Phase 9 in the roadmap](../roadmap/README.md#phase-9--a-hosted-language-model).
+
+### Phase 10 — Sign-in through an OpenID Connect provider (planned)
+- Let users sign in through one configured OpenID Connect provider, with the API as the client: the authorization code flow with PKCE, ID token checks by a maintained library, and the same session cookie afterwards.
+- Keep local accounts as the default, never link accounts by email, and keep authorization in the app's workspace memberships.
+- **Done when:** sign-in through Keycloak works end to end in CI, every refusal case is refused, password sign-in still works, and a security review has been recorded.
+- **Plan:** [Phase 10 in the roadmap](../roadmap/README.md#phase-10--sign-in-through-an-openid-connect-provider).
+
 ## 11. Quality strategy
 
 - **Unit tests:** chunk boundaries/overlap, parser normalization, relevance threshold/abstention, citation mapping, auth policy.
@@ -552,7 +580,7 @@ Limits: sign-in attempts and registrations are counted per network address (10 a
 
 ## 13. Free/local development and cost controls
 
-The core can be developed locally without a cloud bill using PostgreSQL/pgvector (in Docker Compose, or natively without containers; see the quickstart), a local embedding model, and optionally Ollama. Local model inference can require substantial RAM/disk and may be slow; a small hosted model is a convenience, not a free guarantee. Keep the provider API optional and make its use explicit. Avoid creating always-on cloud databases, Kubernetes clusters, NAT gateways, or GPU instances for a portfolio demo. If testing cloud, set billing alerts and a budget where available, choose short-lived resources, document teardown, and verify current provider pricing/free limits first.
+The core can be developed locally without a cloud bill using PostgreSQL/pgvector (in Docker Compose, or natively without containers; see the quickstart), a local embedding model, and optionally Ollama. Local model inference can require substantial RAM/disk and may be slow; a small hosted model is a convenience, not a free guarantee. Keep the provider API optional and make its use explicit. The planned hosted-model adapter ([Phase 9 in the roadmap](../roadmap/README.md#phase-9--a-hosted-language-model)) keeps the local model as the default, caps hosted calls per day, and makes no hosted call until the owner has approved a vendor and its estimated cost. Avoid creating always-on cloud databases, Kubernetes clusters, NAT gateways, or GPU instances for a portfolio demo. If testing cloud, set billing alerts and a budget where available, choose short-lived resources, document teardown, and verify current provider pricing/free limits first.
 
 ## 14. Portfolio and resume evidence
 
@@ -571,14 +599,16 @@ Resume bullet template (replace brackets with verified values): “Built a Pytho
 
 ## 15. Decisions intentionally deferred
 
-- Hosted model vendor and exact model, based on privacy, cost, availability, and evaluation.
+Four of these now have a plan, Phases 7 to 10 in the [roadmap](../roadmap/README.md), but none is built or settled yet: each phase opens with a decision, and today's behavior stays the default until a measurement, a test, or a review supports a change. The cloud, replacing the default local model, and answering outside the request stay deferred.
+
+- Hosted model vendor and exact model, based on privacy, cost, availability, and evaluation. Planned as [Phase 9](../roadmap/README.md#phase-9--a-hosted-language-model); no vendor is chosen without the owner's approval of its terms and cost.
 - Whether a newer, permissively licensed small model should replace the default local model (`qwen3:4b-instruct-2507-q4_K_M`), based on evaluation.
 - Cloud provider and deployment service, pending current target-job research and cost estimate.
-- Whether durable queueing is needed, based on observed ingestion reliability and workload.
+- Whether durable queueing is needed, based on observed ingestion reliability and workload. Planned as [Phase 8](../roadmap/README.md#phase-8--a-durable-queue-for-indexing), with PostgreSQL as the queue.
 - Whether answers should be written outside the HTTP request (a queue, or streamed replies), if waiting for the model holds up the API.
-- Keyword/hybrid search, reranking, and additional vector index tuning, based on evaluation evidence.
-- Re-tuning the evidence threshold (0.5) and the number of passages per question (4), which Phase 5 chose using the same questions it scored them on, once a larger, independently reviewed question set exists.
-- Full authentication provider, if the project is used beyond a portfolio demo.
+- Keyword/hybrid search, reranking, and additional vector index tuning, based on evaluation evidence. Hybrid search and reranking are planned as [Phase 7](../roadmap/README.md#phase-7--hybrid-search-and-reranking); index tuning stays deferred.
+- Re-tuning the evidence threshold (0.5) and the number of passages per question (4), which Phase 5 chose using the same questions it scored them on, once a larger, independently reviewed question set exists. Phase 7's new question set checks them, without re-tuning them.
+- Full authentication provider, if the project is used beyond a portfolio demo. Planned as [Phase 10](../roadmap/README.md#phase-10--sign-in-through-an-openid-connect-provider): one OpenID Connect provider per deployment.
 
 ## 16. Suggested first implementation milestone
 

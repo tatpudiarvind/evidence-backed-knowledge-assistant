@@ -145,6 +145,62 @@ Counts are unweighted: a small task and a large one each count as one. Types: Bu
 | P6-05 | Cost estimate and choice of one cloud (optional) | Decision | ⏸️ Deferred | P5-08 | — | PD-07. Don't assume any free tier lasts. Phase 6 ended on 2026-10-31 without it; Arvind prefers to keep everything local for now (D-31) |
 | P6-06 | Optional deployment: least-privilege identity, managed secrets, HTTPS, backups, budget alerts, teardown steps | Ops | ⏸️ Deferred | P6-05 | — | Never expose the database publicly; avoid always-on databases, Kubernetes, NAT gateways, and GPUs |
 
+## Phase 7 — Hybrid search and reranking
+
+**Definition of done (spec):** every mode has been measured on both question sets, the default has been chosen by the rule fixed in advance (keeping vector search is a valid result), and the tests pass locally and in CI. **Met:** ⏳ Not started. Planned on 2026-10-31 (D-80); the design is in the [roadmap](../roadmap/README.md#phase-7--hybrid-search-and-reranking).
+
+| ID | Task | Type | Status | Depends on | Evidence / output | Remarks |
+|---|---|---|---|---|---|---|
+| P7-01 | Decide the design and fix the rule for choosing the default before any run: the keyword ranking (`ts_rank_cd` or `ts_rank`), the candidates per search, the reranker and its revision, the main measure, the margin, and the time budget | Decision | ⏳ Not started | P5-08 | — | PD-09; R-27. A tie, a difference under the margin, or a broken guardrail keeps `vector`. Licenses checked again |
+| P7-02 | A held-out evaluation set: new synthetic documents and questions in `evals/held-out/`, reviewed by Arvind and frozen before any Phase 7 run | Test | ⏳ Not started | P5-01 | — | R-27. The same format as `evals/questions.jsonl`. No setting may be chosen with it |
+| P7-03 | Keyword search: a stored generated `tsvector` column on `document_chunks` with a GIN index, and a query built from the question's words | Build | ⏳ Not started | P7-01 | — | An Alembic migration. The same scope as the vector search: the workspace's ready documents, for its members only. English only |
+| P7-04 | Reciprocal rank fusion and `RETRIEVAL_MODE` (`vector`, `hybrid`, or `hybrid_rerank`), with the minimum similarity applied before fusion in every mode | Build | ⏳ Not started | P7-03 | — | Default `vector`, today's search. k = 60. The results record how many keyword matches the minimum dropped |
+| P7-05 | An optional cross-encoder behind a `Reranker` interface: pinned to a revision, downloaded by the CLI, and falling back to the fused order if it fails | Build | ⏳ Not started | P7-04 | — | Runs on the CPU over the fused candidates only. One more model for CI to download (R-20) |
+| P7-06 | Tests: fusion, keyword queries, the reranker's fallback, the migration, and workspace isolation and the robustness tests in every mode | Test | ⏳ Not started | P7-03 – P7-05 | — | With PostgreSQL, not a stand-in |
+| P7-07 | Run every mode search-only on both question sets, run the chosen mode with the local model, and choose the default by the P7-01 rule | Verify | ⏳ Not started | P7-02, P7-06 | — | One results file per run, with its conditions. Keeping `vector` is a valid result. Also a first independent check of the 4 passages and the 0.5 minimum (D-67), without re-tuning them |
+| P7-08 | Update the evaluation, architecture, and operations guides, the specification, and this tracker | Docs | ⏳ Not started | P7-07 | — | Results reported only as measured, with their conditions |
+
+## Phase 8 — A durable queue for indexing
+
+**Definition of done (spec):** killing the worker while it indexes loses no document and saves no passage twice, a parser that hangs or crashes can't keep other documents waiting, and the queue's depth is in the metrics. **Met:** ⏳ Not started. Planned on 2026-10-31 (D-80); the design is in the [roadmap](../roadmap/README.md#phase-8--a-durable-queue-for-indexing).
+
+| ID | Task | Type | Status | Depends on | Evidence / output | Remarks |
+|---|---|---|---|---|---|---|
+| P8-01 | Decide the design: a `jobs` table, procrastinate, or the smallest fix (a lease and an attempt count on the document); which failure codes are temporary; the lease length; the maximum attempts; and the backoff | Decision | ⏳ Not started | — | — | PD-08. PostgreSQL stays the queue: no Redis, Kafka, or other broker |
+| P8-02 | The queue: jobs added in the upload's or Retry's transaction with `NOTIFY`, claimed with SKIP LOCKED, leases with a heartbeat and fencing, a reaper, retries with backoff and jitter, and cancelling on delete | Build | ⏳ Not started | P8-01 | — | Replaces the requeue at start (D-45). The statuses users see don't change |
+| P8-03 | Parsing in a child process with a minimal environment, killed at the time limit, with a memory limit on Linux | Build | ⏳ Not started | P8-01 | — | No `DATABASE_URL` or other secret in the child. Reduces R-19 and the kind of problem in I-42 |
+| P8-04 | The worker: `python -m app.worker`, `INDEXING_RUNNER` (`embedded` by default, or `worker`), `LISTEN` with polling, the hourly cleanup, and the queue's metrics in `/metrics` | Build | ⏳ Not started | P8-02, P8-03 | — | The API stays one process, so its in-memory rate limits still hold |
+| P8-05 | Tests: concurrent claims, lease expiry and fencing, attempts, deduplication, rollback, a hanging or crashing parser, and cancelling on delete; a manual kill; and the memory both processes use | Test | ⏳ Not started | P8-04 | — | With PostgreSQL. Memory measured before the worker becomes the default anywhere |
+| P8-06 | A `worker` service in Compose, used by CI's compose smoke and end-to-end jobs | Ops | ⏳ Not started | P8-04 | — | On this machine, the app still runs without containers (D-31) |
+| P8-07 | Update the architecture, operations, and security guides, the specification, and this tracker | Docs | ⏳ Not started | P8-05, P8-06 | — | R-19 can be closed once parsing runs in a child process |
+
+## Phase 9 — A hosted language model
+
+**Definition of done (spec):** the adapter passes its tests without a hosted account, answers record their provider, and a hosted evaluation has run only if the owner approved a vendor and its cost. **Met:** ⏳ Not started. Planned on 2026-10-31 (D-80); the design is in the [roadmap](../roadmap/README.md#phase-9--a-hosted-language-model).
+
+| ID | Task | Type | Status | Depends on | Evidence / output | Remarks |
+|---|---|---|---|---|---|---|
+| P9-01 | Decide the design: `urllib` or a vendor's SDK, the token-limit parameter, the retries, and the daily limit; and, if a vendor is proposed, read its terms, estimate the cost, and ask Arvind to approve it | Decision | ⏳ Not started | — | — | PD-06; R-28. No hosted call before approval. An SDK must work with this machine's certificate setup (R-16) |
+| P9-02 | `OpenAICompatibleChatModel` in `app/providers/llm.py`: the same prompt, limits, and citation check; retries for 429, 5xx, and lost connections; nothing logged from the request, the reply, or the key | Build | ⏳ Not started | P9-01 | — | Developed against Ollama's OpenAI-compatible endpoint, so it needs no hosted account. `LLM_PROVIDER` stays `ollama` by default |
+| P9-03 | `answers.model_provider`, a notice next to the question box, `LLM_DAILY_CALL_LIMIT` counted in PostgreSQL, and token metrics | Build | ⏳ Not started | P9-02 | — | An Alembic migration. The notice shows before anything is sent to a hosted provider |
+| P9-04 | Tests with a fake OpenAI-compatible server (429 with `Retry-After`, 5xx, timeouts, oversized or invalid replies, and no key or text in the logs), web tests, and a run against Ollama by hand | Test | ⏳ Not started | P9-03 | — | No key in CI, and no hosted call in any automated test |
+| P9-05 | Only if Arvind approved a vendor: run the evaluation with it, and record the vendor, the model, the date, and the cost | Verify | ⏳ Not started | P9-04 | — | Synthetic documents only. Without approval, the phase ends without a hosted run |
+| P9-06 | Update the privacy, operations, and architecture guides, the specification, and this tracker | Docs | ⏳ Not started | P9-04 | — | The privacy page says what leaves the computer with a hosted provider |
+
+## Phase 10 — Sign-in through an OpenID Connect provider
+
+**Definition of done (spec):** sign-in through Keycloak works end to end in CI, every refusal case is refused, password sign-in still works, and a security review has been recorded. **Met:** ⏳ Not started. Planned on 2026-10-31 (D-80); the design is in the [roadmap](../roadmap/README.md#phase-10--sign-in-through-an-openid-connect-provider).
+
+| ID | Task | Type | Status | Depends on | Evidence / output | Remarks |
+|---|---|---|---|---|---|---|
+| P10-01 | Decide the design: the library (Authlib, PyJWT, or joserfc), the test provider, the values of `AUTH_MODE`, where login states are kept, and whether signing out also signs out at the provider | Decision | ⏳ Not started | — | — | PD-10; R-29. Licenses checked again. One provider per deployment |
+| P10-02 | The data model: `user_identities`, unique on issuer and subject; an optional `password_hash`; login states; and how an account created through the provider gets its email | Build | ⏳ Not started | P10-01 | — | An Alembic migration. Accounts are never linked by email |
+| P10-03 | The endpoints: `GET /api/v1/auth/oidc/login` and `/callback`, with PKCE (S256), state and nonce, the ID token checks, safe return paths, rate limits, and cleanup of login states | Build | ⏳ Not started | P10-02 | — | The API is the client, and the user gets the same `eka_session` cookie after sign-in. Follows RFC 9700 |
+| P10-04 | The web app: a "Sign in with" button, and plain-language messages for a failed sign-in | Build | ⏳ Not started | P10-03 | — | Shown only when `AUTH_MODE` allows it |
+| P10-05 | Tests: a fake provider with refusal cases, open-redirect cases, the account rules, and Keycloak end to end in CI, including the session cookie after the redirect back | Test | ⏳ Not started | P10-04 | — | Whether the browser sends the `Strict` session cookie after coming back from the provider hasn't been tried yet |
+| P10-06 | A security review against RFC 9700 and OpenID Connect Core, recorded in the security guide | Security | ⏳ Not started | P10-05 | — | Findings fixed, or recorded as risks or issues |
+| P10-07 | Update the security, privacy, API, and operations guides, the specification, and this tracker | Docs | ⏳ Not started | P10-06 | — | Switching an install to `oidc` locks out local accounts without a linked provider; the operations guide will say so |
+
 ## Documentation and tracking
 
 | ID | Task | Type | Status | Depends on | Evidence / output | Remarks |
@@ -156,3 +212,4 @@ Counts are unweighted: a small task and a large one each count as one. Types: Bu
 | DOC-05 | Keep this tracker current after each work session | Docs | 🔄 In progress | — | Change log in [README.md](README.md) | Ongoing |
 | DOC-06 | Put every project document in `docs/`, in a folder for each kind, behind a short front page | Docs | ✅ Done | DOC-01 | The front page `README.md`, the index `docs/README.md`, the spec in `docs/specification/README.md`, and the tools guide in `docs/dev-tools/README.md`; links and anchors checked (V-120), and the guide's content compared with the original (V-121) | Requested by Arvind on 2026-10-29 (D-54). Reviewed before committing (V-122); pushed on 2026-10-29 (V-139) |
 | DOC-07 | A guide to the whole project: what it does, every part of the stack and why it was chosen, and an interviewer's questions about the project with Arvind's answers | Docs | ✅ Done | P6-02 | `docs/project-guide/README.md` (local only, git-ignored: D-77); checked (V-198 – V-201) | Requested by Arvind on 2026-10-31, for after every phase was done; written the same day. 10 parts: the project; how it works; the tech stack, piece by piece, and why; security and privacy; quality (tests, CI, and evaluation); running it; how it was built; limitations and future work; a review checklist for Arvind before he cites anything; and an interviewer's 91 questions with his answers in the first person, plus 20 rapid-fire facts. Built only from what the code, the project's documents, and this tracker show. Arvind chose to keep it local (D-77). It describes commit `84d6c94`, so check its facts again whenever the project changes |
+| DOC-08 | A plan for the later features: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider | Docs | ✅ Done | DOC-01 | The [roadmap](../roadmap/README.md), and the spec's §7, §10, §13, and §15; links checked and the diagrams render (V-232, V-233); reviewed before committing (V-234) | Requested by Arvind on 2026-10-31; he chose the order (D-80). Phases 7 to 10, 28 tasks, none started. A plan, not a result: each phase opens with a decision task, and today's behavior stays the default until a measurement, a test, or a review supports a change. PD-06, PD-08, PD-09, and PD-10 stay pending until their phases decide them. Committed on the local branch `docs-later-features-plan`; not pushed |
