@@ -6,7 +6,7 @@ It is a retrieval and summarization demo, not professional, medical, legal, or f
 
 ## Status
 
-As of 2026-11-01, Phases 0 to 6 of the [roadmap](docs/specification/README.md#10-implementation-roadmap-and-definition-of-done) are done, and Phase 7 is built but not finished. The optional cloud deployment (tasks P6-05 and P6-06) is deferred, so the app hasn't been deployed anywhere; it runs on one computer.
+As of 2026-11-01, Phases 0 to 6 of the [roadmap](docs/specification/README.md#10-implementation-roadmap-and-definition-of-done) are done, Phase 7 is built but not finished, and Phase 8's durable queue is implemented with local checks passed and branch CI pending. The optional cloud deployment (tasks P6-05 and P6-06) is deferred, so the app hasn't been deployed anywhere; it runs on one computer.
 
 - **Foundation:** a FastAPI backend, a React and TypeScript web app built with Vite, PostgreSQL with pgvector, Alembic migrations, health endpoints, Docker Compose, and GitHub Actions CI.
 - **Accounts and documents:** local accounts, and workspaces that other users can't access; upload, list, download, and delete for PDF, Word (.docx), and plain-text files.
@@ -18,7 +18,7 @@ As of 2026-11-01, Phases 0 to 6 of the [roadmap](docs/specification/README.md#10
 
 **Measured on 2026-10-29,** in one run, on one computer, with 66 questions about 4 short synthetic documents and settings chosen using the same questions, so this is not a benchmark: the 4 passages kept for each question stated every expected fact for 52 of the 54 questions that have facts. With the local model, the answers stated every fact for 48 of those 54, and 57 of their 61 citations pointed to a passage stating a fact; all 12 questions without facts were declined. Reading the 50 written answers found 2 wrong and 1 misleading. The [evaluation](docs/evaluation/README.md) has the details and limits.
 
-**Next, planned but not started:** a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider, as Phases 8 to 10 of the [plan for later features](docs/roadmap/README.md). Each keeps today's behavior by default until a measurement, a test, or a review supports a change.
+**Next:** Phase 8's CI and tracker verification; then a hosted language model and sign-in through an OpenID Connect provider, as Phases 9 and 10 of the [plan for later features](docs/roadmap/README.md). Each keeps today's behavior by default until a measurement, a test, or a review supports a change.
 
 Progress, checks, and decisions are recorded in the [project tracker](docs/tracker/README.md).
 
@@ -35,7 +35,7 @@ The end-to-end test took this screenshot in CI, with a synthetic document and no
 - **Prompt injection is reduced, not removed.** In the evaluation, the model obeyed a question that told it to reply only "PINEAPPLE", and the citation check declined the reply. It ignored the two planted instructions that reached it from documents, in one run, which doesn't show that it can't be misled.
 - **Basic accounts and workspaces.** Accounts are local, without email verification, password reset, or a second factor. Workspaces can't be shared, and neither accounts nor workspaces can be deleted yet.
 - **Documents.** PDF, Word (.docx), and plain-text files up to 10 MiB. Scanned PDFs can't be indexed, because there's no OCR, and files aren't scanned for malware.
-- **One API process.** Rate limits live in its memory, and documents are indexed by a thread inside it rather than through a durable queue.
+- **One API process.** Rate limits live in its memory. Documents use an embedded indexing thread by default, with an opt-in durable worker.
 - **Accessibility checked automatically.** In CI, axe's checks for WCAG 2.2 A and AA find no problems on six screens, but automated checks catch only some kinds of problems, so this doesn't show that the app conforms to WCAG 2.2.
 - **Not for regulated use.** It isn't certified for regulated or clinical use, and hasn't been reviewed or penetration-tested by anyone independent. The [security guide](docs/security/README.md#known-gaps) lists its known gaps.
 
@@ -47,7 +47,7 @@ Every project document is in [`docs`](docs/README.md), with a folder for each ki
 |---|---|---|
 | [Documents index](docs/README.md) | The folders in `docs` and what each one holds | Start here to browse |
 | [Specification](docs/specification/README.md) | Goals, user stories, architecture and diagrams, code layout, data model and API, roadmap, testing, security, costs, and the local quickstart | The source of truth. It was this README until 2026-10-29 |
-| [Roadmap for later features](docs/roadmap/README.md) | The plan for Phases 7 to 10: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider | A plan, not a result. Phase 7 is built but not finished; Phases 8 to 10 aren't built yet |
+| [Roadmap for later features](docs/roadmap/README.md) | The plan for Phases 7 to 10: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider | Phase 8 is implemented; CI verification pending. Phases 9 and 10 are planned |
 | [Architecture](docs/architecture/README.md) | How the code is built: the runtime view, the backend's layers, how a request is handled, background work, answering a question, the data model, the web app, and the main design choices and their limits | Diagrams of the code as it is |
 | [API](docs/api/README.md) | Every endpoint: signing in, workspaces, documents, questions, errors and their codes, health and metrics, and limits | The interactive reference is at `/docs` on the development API |
 | [Security](docs/security/README.md) | How accounts, workspaces, uploads, and answers are protected, the production stack, dependencies, and the known gaps | Not certified for regulated use |

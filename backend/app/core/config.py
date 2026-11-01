@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     # How long an upload may take to arrive, so a stalled one can't hold its connection forever.
     upload_timeout_seconds: int = Field(default=120, ge=1, le=3600)
 
+    indexing_runner: Literal["embedded", "worker"] = "embedded"
     # Indexing (Phase 3). A background thread in the API process indexes queued documents;
     # turn it off to keep uploads queued, as the tests do.
     ingestion_worker_enabled: bool = True

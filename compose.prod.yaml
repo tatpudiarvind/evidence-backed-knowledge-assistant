@@ -133,6 +133,22 @@ services:
     <<: *hardening
     logging: *logging
 
+  worker:
+    profiles: ["worker"]
+    build: *backend-build
+    environment: *backend-environment
+    volumes:
+      - document_storage:/app/storage
+      - embedding_models:/app/models
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    <<: *hardening
+    logging: *logging
+    command: ["python", "-m", "app.worker"]
+
   web:
     build:
       context: ./frontend

@@ -104,6 +104,8 @@ jobs:
   compose-smoke:
     name: compose smoke
     runs-on: ubuntu-24.04
+    env:
+      INDEXING_RUNNER: worker
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -113,7 +115,7 @@ jobs:
         run: docker compose config --quiet
       - name: Build and start the stack
         # The migrate service brings the schema up to date before the API starts.
-        run: docker compose up --build --detach --wait --wait-timeout 300
+        run: docker compose --profile worker up --build --detach --wait --wait-timeout 300
       - name: Download the embedding model
         run: |
           for attempt in 1 2 3; do
@@ -221,6 +223,8 @@ jobs:
     env:
       # The production-style stack: the API's production image behind nginx.
       COMPOSE_FILE: compose.prod.yaml
+      COMPOSE_PROFILES: worker
+      INDEXING_RUNNER: worker
     steps:
       - uses: actions/checkout@v7
       - name: Create .env from the example

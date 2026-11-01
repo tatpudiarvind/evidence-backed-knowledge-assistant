@@ -65,9 +65,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        if settings.ingestion_worker_enabled:
+        if settings.ingestion_worker_enabled and settings.indexing_runner == "embedded":
             worker.start()
-        if settings.question_cleanup_enabled:
+        if settings.question_cleanup_enabled and settings.indexing_runner == "embedded":
             cleanup.start()
         try:
             yield

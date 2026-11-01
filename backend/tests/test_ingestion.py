@@ -6,6 +6,8 @@ standing in for the model. The last test runs the real background worker.
 
 import logging
 import math
+import subprocess
+import sys
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -16,9 +18,9 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
-from app.db.models import Document, DocumentChunk
+from app.db.models import Document, DocumentChunk, Job
 from app.domain.indexing import EMBEDDING_DIMENSION, FAILURE_MESSAGES, IndexingFailure
 from app.providers.embeddings import EmbeddingUnavailableError
 from app.repositories import chunks as chunk_repository
@@ -234,8 +236,17 @@ def test_two_indexers_never_claim_the_same_document(library: Library) -> None:
 
 def _assert_failed(library: Library, document_id: str, failure: IndexingFailure) -> None:
     document = library.document(document_id)
-    assert (document["status"], document["failure_code"]) == ("failed", failure.value)
-    assert document["failure_message"] == FAILURE_MESSAGES[failure]
+    if failure.value in {
+        "embedding_unavailable",
+        "embedding_failed",
+        "ingestion_failed",
+        "parse_timeout",
+    }:
+        assert (document["status"], document["failure_code"]) == ("queued", None)
+        assert document["failure_message"] is None
+    else:
+        assert (document["status"], document["failure_code"]) == ("failed", failure.value)
+        assert document["failure_message"] == FAILURE_MESSAGES[failure]
     assert library.chunks(document_id) == []
     assert metric_value(library.app, PROCESSED, outcome=failure.value) == 1
 
@@ -317,10 +328,13 @@ def test_documents_can_be_retried_once_the_model_is_available(
     _assert_failed(library, document_id, IndexingFailure.EMBEDDING_UNAVAILABLE)
 
     embeddings.available = True
-    retried = library.client.post(f"/api/v1/documents/{document_id}/retry", headers=CSRF_HEADERS)
-
-    assert retried.status_code == 202
-    assert retried.json()["status"] == "queued"
+    with library.app.state.session_factory() as session:
+        session.execute(
+            update(Job)
+            .where(Job.dedupe_key == f"index_document:{document_id}")
+            .values(run_after=func.now())
+        )
+        session.commit()
     assert library.index() == 1
     assert library.document(document_id)["status"] == "ready"
     assert len(library.chunks(document_id)) == 1
@@ -470,3 +484,41 @@ def test_the_background_worker_indexes_uploads(make_library: Callable[..., Libra
         assert library.document(document_id)["status"] == "ready"
 
     assert not worker.running
+
+
+def test_hanging_parser_child_is_killed_at_timeout(
+    make_library: Callable[..., Library], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library = make_library(parse_timeout_seconds=1)
+    document_id = library.upload("notes.txt", b"Synthetic text.")
+    real_run = subprocess.run
+
+    def hang(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return real_run(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            **kwargs,
+        )
+
+    monkeypatch.setattr("app.services.ingestion.subprocess.run", hang)
+    assert library.index() == 1
+    _assert_failed(library, document_id, IndexingFailure.PARSE_TIMEOUT)
+
+
+def test_crashed_parser_child_counts_an_attempt(
+    library: Library, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document_id = library.upload("notes.txt", b"Synthetic text.")
+    real_run = subprocess.run
+
+    def crash(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return real_run(
+            [sys.executable, "-c", "import os; os._exit(23)"],
+            **kwargs,
+        )
+
+    monkeypatch.setattr("app.services.ingestion.subprocess.run", crash)
+    assert library.index() == 1
+    with library.app.state.session_factory() as session:
+        job = session.scalar(select(Job).where(Job.dedupe_key == f"index_document:{document_id}"))
+        assert job and job.attempts == 1 and job.status == "queued"
+    assert library.document(document_id)["status"] == "queued"

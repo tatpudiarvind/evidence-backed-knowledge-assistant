@@ -1,14 +1,14 @@
 # Architecture
 
-How the Evidence-backed Knowledge Assistant is built, as of Phase 7 (2026-11-01). The [specification](../specification/README.md#4-architecture-and-technology-decisions) records the design and the reasons for it. This page describes the code as it is, so a reviewer can find their way around it. Companion guides: [API](../api/README.md), [security](../security/README.md), and [operations](../operations/README.md).
+How the Evidence-backed Knowledge Assistant is built, as of Phase 8 (2026-11-01). The [specification](../specification/README.md#4-architecture-and-technology-decisions) records the design and the reasons for it. This page describes the code as it is, so a reviewer can find their way around it. Companion guides: [API](../api/README.md), [security](../security/README.md), and [operations](../operations/README.md).
 
 ## At a glance
 
-- **One application, one process.** The backend is a modular monolith. The FastAPI app runs in a single uvicorn process with two background threads, one for indexing documents and one for deleting old questions. There are no separate services or message queues.
+- **One application with two runner choices.** `INDEXING_RUNNER=embedded` (the default) runs indexing in a thread inside the API; `worker` moves indexing and hourly cleanup to `python -m app.worker`. Both use PostgreSQL jobs, leases, and parser child processes. No external broker is used.
 - **One database.** PostgreSQL 16 with the pgvector 0.8.0 extension holds the accounts, workspaces, documents, the text chunks with their embeddings, and the questions and answers. Vector search runs in the same database, in the same query that checks workspace membership.
 - **Files on a volume.** Uploaded files are stored in a local folder under random names.
 - **A static web app.** The React and TypeScript single-page app is built by Vite. In production nginx serves it; in development, Vite's dev server does.
-- **Models on the server only.** The embedding model runs inside the API process, on the CPU, and so does the reranker, in `hybrid_rerank` mode only. A language model is optional: Ollama runs outside the stack, and only the backend calls it, over HTTP.
+- **Models on the server only.** The embedding model runs inside the selected indexing process, on the CPU, and so does the reranker in the API, in `hybrid_rerank` mode only. A language model is optional: Ollama runs outside the stack, and only the backend calls it, over HTTP.
 - **The browser talks only to the API.** It never reaches the database, the stored files, or a model directly.
 
 ## Runtime view
@@ -20,7 +20,8 @@ flowchart LR
     Browser["Browser<br/>React web app"]
     subgraph Stack["compose.prod.yaml"]
         Web["web<br/>nginx 1.30: built web app,<br/>proxy for /api/ and /health/<br/>127.0.0.1:8080"]
-        API["backend<br/>one uvicorn process:<br/>FastAPI app, indexing thread,<br/>question cleanup thread,<br/>embedding model on the CPU,<br/>reranker in hybrid_rerank mode"]
+        API["backend<br/>FastAPI app and reranker"]
+        Worker["worker<br/>durable indexing and cleanup<br/>embedding model on the CPU"]
         Migrate["migrate<br/>alembic upgrade head,<br/>then exits"]
         DB[("db<br/>PostgreSQL 16<br/>with pgvector 0.8.0")]
         Files[("document_storage<br/>volume")]
@@ -31,14 +32,15 @@ flowchart LR
     Browser -->|"pages, /api/, /health/"| Web
     Web -->|"/api/ and /health/"| API
     API --> DB
+    Worker --> DB
     Migrate --> DB
     DB --- PGData
-    API --- Files
-    API --- Models
+    Worker --- Files
+    Worker --- Models
     API -.->|"only with LLM_PROVIDER=ollama"| Ollama
 ```
 
-The two Compose stacks differ like this:
+The `worker` Compose service is in the optional `worker` profile; CI enables it explicitly. Both stacks keep `embedded` as the default. The two Compose stacks differ like this:
 
 | | Development: `compose.yaml` | Production-style: `compose.prod.yaml` |
 |---|---|---|
@@ -46,7 +48,8 @@ The two Compose stacks differ like this:
 | API | Published on `127.0.0.1:8000`. The browser calls it directly, and CORS allows `http://localhost:5173` | Not published. The browser reaches it through nginx, on the web app's own origin, so CORS allows no origins |
 | Database | Published on `127.0.0.1:5432` | Not published |
 | Migrations | The `migrate` service runs them, and the API starts only after they succeed | The same |
-| Images | Development targets, with the test tools | Production targets, without test tools and run by a user without root rights. The migration, API, and web containers can't change their own files and have no Linux capabilities; the database runs the same pgvector image as in development |
+| Worker | `worker` service, separate from the API | `worker` service, separate from the API; shares the file and model volumes |
+| Images | Development targets, with the test tools | Production targets, without test tools and run by a user without root rights. The migration, API, worker, and web containers can't change their own files and have no Linux capabilities; the database runs the same pgvector image as in development |
 | Logs | Text by default | JSON, one object per line |
 
 Both stacks give the API the same settings, with production values where they differ, and CI checks that the two lists match. Running without containers is also supported ([quickstart](../specification/README.md#without-containers-no-administrator-rights)).
@@ -81,19 +84,19 @@ flowchart TD
 
 | Folder or file | What it holds |
 |---|---|
-| `main.py`, `factory.py` | `create_app()` builds the app from settings: the database engine, the file storage, the embedding provider, the Ollama model when one is configured, the reranker in `hybrid_rerank` mode, the metrics, the two background threads, the middleware, the error handlers, and the routers. Tests call it with stand-ins, such as a fake embedder or a scripted model. |
+| `main.py`, `factory.py` | `create_app()` builds the app from settings: the database engine, the file storage, the embedding provider, the Ollama model when one is configured, the reranker in `hybrid_rerank` mode, the metrics, the workers, the middleware, the error handlers, and the routers. Tests call it with stand-ins, such as a fake embedder or a scripted model. |
 | `api/` | HTTP. The routers for the health checks and for `/api/v1` (`auth`, `workspaces`, `documents`, `uploads`, `questions`), the Pydantic request and response models (`schemas.py`), and the dependencies in `deps.py`: the database session, the signed-in user, and the CSRF header check. |
 | `services/` | The use cases: registering and signing in, workspaces, storing, retrying and deleting documents, indexing a document, finding a question's passages in the search mode set, and answering a question. Every service that touches workspace data checks membership itself. |
 | `repositories/` | The SQLAlchemy queries, one module per group of tables. Every query that returns workspace data joins the memberships on the signed-in user. |
 | `domain/` | Logic without I/O: file type and content checks, text normalization and chunking, the keyword query and reciprocal rank fusion, prompt building and the citation check, and the status and reason enumerations. It imports nothing else from the app, so its tests need no database or model. |
 | `providers/` | Adapters behind small interfaces: parsers (pypdf, python-docx, UTF-8 text), embeddings (Sentence Transformers), the reranker (a Sentence Transformers cross-encoder), the language model (Ollama's chat API over HTTP), and file storage (a local folder). |
-| `workers/` | The indexing thread, which runs the indexer the factory passes it, and the question cleanup thread. |
+| `workers/` | The indexing loop and question cleanup thread; `worker.py` starts them in the standalone process. |
 | `db/` | The SQLAlchemy table models, and helpers that create and empty the throwaway databases of the tests and the evaluation. |
 | `core/` | Settings (pydantic-settings), the database engine, errors, logging, metrics, middleware, rate limits, and password hashing and session tokens. |
 | `evaluation/` | The evaluation command: the corpus, the reviewed questions, the runner, the scoring, and the report ([evaluation](../evaluation/README.md)). |
 | `cli.py` | `python -m app.cli` with five commands: `download-embedding-model`, `download-reranker-model`, `evaluate`, `compare-results`, and `write-demo-files`. |
 
-The schema is created by Alembic migrations in `backend/alembic/versions`, `0001` to `0006`, never by the app.
+The schema is created by Alembic migrations in `backend/alembic/versions`, `0001` to `0007`, never by the app.
 
 ## How a request is handled
 
@@ -113,46 +116,34 @@ The schema is created by Alembic migrations in `backend/alembic/versions`, `0001
 
 ### Indexing documents
 
-An upload is stored and recorded as `queued`, and the upload wakes the indexing thread. When there's nothing to wake it, the thread checks for queued documents every 5 seconds. For each document, it:
+An upload or Retry creates a `jobs` row and sends `NOTIFY` in the same PostgreSQL transaction as the document status change. The notification is delivered only after commit; the worker uses a dedicated autocommit `LISTEN` connection and still polls every 5 seconds in case it was offline. The job holds IDs only, never file or document text. A partial unique index deduplicates unfinished work by document.
 
-1. Claims the oldest queued document with `SELECT … FOR UPDATE SKIP LOCKED`, marks it `processing`, and commits, so no transaction stays open while it works.
-2. Reads the file and extracts its text: PDF page by page, Word section by section under each heading with tables as rows, and plain text whole. Limits on pages, characters, and parsing time apply.
-3. Normalizes the text and splits it into chunks of about 1,000 characters, with 150 characters of overlap. A chunk ends at a paragraph, line, sentence, or word boundary where it can, and never spans two pages or sections.
-4. Embeds the chunks on the CPU in batches of 32, with `BAAI/bge-small-en-v1.5` at a pinned revision, loaded from disk without a network.
-5. Saves the chunks and marks the document `ready`, but only if it's still `processing`. A document that was deleted in the meantime stays deleted.
-
-A document that fails is marked `failed`, with a code and a message saying what to do, and can be retried. When the API starts, documents left `processing` by a server that stopped mid-way are queued again.
+1. Claim the oldest due job with one `UPDATE ... RETURNING`; its subquery uses `FOR UPDATE SKIP LOCKED`. The claim commits before work starts, increments `attempts`, and sets a 60-second lease.
+2. A heartbeat every 15 seconds extends the lease. A reaper returns expired jobs to the queue or fails them after the fifth attempt. Each final write locks the job and fences on the current worker and unexpired lease; chunks and the successful job/document states commit together.
+3. The parser runs in a child Python process with only the storage path, MIME type, parse limits, and a minimal environment. It receives no `DATABASE_URL` or application secrets. The parent kills it at `PARSE_TIMEOUT_SECONDS`; Linux also applies a 1.5 GiB address-space limit. Windows has no equivalent limit in this implementation.
+4. The parent chunks the returned text and embeds it on the CPU. `embedding_unavailable`, `embedding_failed`, `ingestion_failed`, and `parse_timeout` are retried; other file-specific failures are terminal. Delays grow from 5 seconds exponentially, capped at 300 seconds, with plus or minus 20% jitter. Five starts are allowed.
+5. A permanent failure ends with `failed` and the safe failure code. A document deleted during work cancels its unfinished jobs; a stale worker cannot save chunks after lease loss or cancellation.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued: upload accepted
-    queued --> processing: indexing thread claims it
-    processing --> ready: chunks and embeddings saved
-    processing --> failed: unreadable, too large, or no model
-    failed --> queued: retry
-    processing --> queued: server restarted mid-way
-    queued --> deleting: delete
-    processing --> deleting: delete
-    ready --> deleting: delete
-    failed --> deleting: delete
-    deleting --> [*]: file and rows removed
+    [*] --> queued: upload or Retry
+    queued --> running: claim and lease
+    running --> succeeded: fenced chunk save
+    running --> queued: temporary failure or lease expiry, attempts left
+    running --> failed: permanent failure or attempt limit
+    queued --> cancelled: document deleted
+    running --> cancelled: document deleted
 ```
 
-Deleting marks the document `deleting`, and deletes the questions whose answers cite it, in one transaction. It then deletes the stored file, and last the document's row, which takes its chunks with it. If the file can't be deleted, the document stays visible as `deleting`, and deleting it again finishes the job.
+The API exposes job counts by status and the age of the oldest queued job at `/metrics`. Document statuses remain `queued`, `processing`, `ready`, and `failed`; failed retries return to `queued`. The migration backfills jobs for pre-Phase-8 queued documents.
 
 ### Deleting old questions
 
-The cleanup thread runs when the API starts and then every hour. It deletes questions asked more than 3 days ago, with their answers and citations. The history already hides them once they're 3 days old, so the hour in between doesn't show.
+The cleanup thread runs when the API starts in embedded mode, or in the worker process when `INDEXING_RUNNER=worker`, and then every hour. It deletes questions asked more than 3 days ago, with their answers and citations. The history already hides them once they're 3 days old, so the hour in between doesn't show.
 
 ### Why threads, and why one process
 
-Indexing runs in a thread of the API process, and PostgreSQL acts as its queue. That keeps parsing and embedding out of the HTTP request without another service to run. The cost is that the backend must run as one process:
-
-- the rate limits count requests in memory;
-- each process would start its own threads;
-- each process would load its own copy of the embedding model, and of the reranker in `hybrid_rerank` mode.
-
-A durable queue and separate workers are deferred until there's a measured need ([specification §15](../specification/README.md#15-decisions-intentionally-deferred)).
+The default remains `embedded`, preserving the existing one-process local setup. `worker` moves indexing and cleanup out of the API, but the API still runs as one process: its rate limits are held in memory. The worker and API each load separate process state; the worker loads its own embedding model. In one Windows sample during indexing, the API used 134.4 MiB working set (852.6 MiB private bytes) and the worker 762.7 MiB working set (2,312.4 MiB private bytes). This is one observation, not a benchmark; worker mode remains opt-in. A parser child is bounded by the configured timeout and, on Linux, a memory limit.
 
 ## Answering a question
 
@@ -201,7 +192,20 @@ erDiagram
     workspaces ||--o{ workspace_memberships : "has"
     users ||--o{ workspaces : "owns"
     workspaces ||--o{ documents : "holds"
-    documents ||--o{ document_chunks : "is split into"
+        documents ||--o{ document_chunks : "is split into"
+    jobs {
+        uuid id PK
+        string kind
+        json payload "IDs only"
+        string status
+        timestamptz run_after
+        int attempts
+        int max_attempts
+        string locked_by
+        timestamptz locked_until
+        string dedupe_key UK "unfinished only"
+        string last_error_code
+    }
     workspaces ||--o{ questions : "is asked about in"
     users ||--o{ questions : "asks"
     questions ||--|| answers : "has"
@@ -276,11 +280,11 @@ erDiagram
 
 The diagram shows the main columns only; `backend/app/db/models.py` has them all. The database itself enforces several rules:
 
-- `documents.status` is one of `queued`, `processing`, `ready`, `failed`, or `deleting`, and membership roles are `owner` or `member`.
+- `documents.status` is one of `queued`, `processing`, `ready`, `failed`, or `deleting`, and membership roles are `owner` or `member`. Job status is `queued`, `running`, `succeeded`, `failed`, or `cancelled`; unfinished jobs have a lease and bounded attempts.
 - An answer has text only when a model wrote it and didn't decline, and a written answer records the model that wrote it.
 - Deleting a workspace, a document, a question, or an answer deletes what depends on it (`ON DELETE CASCADE`).
 - `document_chunks.embedding` is a `vector(384)` with an HNSW index for cosine distance. HNSW works on an empty table, unlike IVFFlat, which needs data before it is built.
-- `document_chunks.search_vector` is a `tsvector` that PostgreSQL generates from the chunk's text with its English configuration and stores, so it can't fall out of step with the text; a GIN index serves the keyword search. Migration `0006` adds both, and PostgreSQL fills the column for chunks that already exist.
+- `document_chunks.search_vector` is a `tsvector` that PostgreSQL generates from the chunk's text with its English configuration and stores, so it can't fall out of step with the text; a GIN index serves the keyword search. Migration `0006` adds both, and PostgreSQL fills the column for chunks that already exist. Migration `0007` adds `jobs`, with a partial unique dedupe index for queued/running jobs; its JSON payload contains the document ID only.
 
 Workspaces are single-user for now: the creator is the only member, with the `owner` role. The `member` role is reserved for sharing, which the membership table already allows for.
 
@@ -301,8 +305,8 @@ Workspaces are single-user for now: the creator is the only member, with the `ow
 
 | Choice | Why | Limit, and what would change it |
 |---|---|---|
-| A modular monolith in one process | One thing to run, test, and debug. The layers keep the code organized without network calls between services | It scales up, not out. More processes would need shared rate limits (for example, in Redis) and a separate indexing worker |
-| PostgreSQL as the indexing queue | `FOR UPDATE SKIP LOCKED` is enough for one worker, and documents can't be lost between two systems | One document at a time. A durable queue is deferred until throughput needs it |
+| A modular monolith, one API process | One thing to run, test, and debug; in-memory rate limits remain consistent | Optional worker process for indexing; multiple API processes still need shared rate limits |
+| PostgreSQL as the indexing queue | Durable jobs, notifications, leases, fencing, and retries in the existing database; no second queue service | One job kind and one embedding model. Worker mode duplicates model memory and stays opt-in until measured |
 | pgvector in the main database | One store and one transaction for metadata and vectors. The membership check and the vector search are one query | Vector search by default. Keyword search (`hybrid`) and reranking (`hybrid_rerank`) are settings since Phase 7, but `hybrid` tied with vector search on the held-out set, and reranking hasn't been measured ([evaluation](../evaluation/README.md#the-choice)) |
 | A small local embedding model, pinned to one revision | No per-call cost, results that can be repeated, and nothing sent to a third party | English-focused, and changing the model means indexing every document again |
 | An optional local language model, with passages-only as the fallback | The app stays useful without a model or a GPU, and the evidence is always shown | Answers are slow on a CPU, and the model's quality limits the answers ([evaluation](../evaluation/README.md)) |

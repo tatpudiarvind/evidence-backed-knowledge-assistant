@@ -1,6 +1,6 @@
 # Security
 
-How the Evidence-backed Knowledge Assistant protects accounts, workspaces, uploaded files, and answers, and what it doesn't protect against yet. This page describes the code as of Phase 7 (2026-11-01). The requirements it follows are in the [specification](../specification/README.md#12-security-privacy-and-operational-requirements). What is stored, logged, and sent, and for how long, is in [privacy and data handling](../privacy/README.md).
+How the Evidence-backed Knowledge Assistant protects accounts, workspaces, uploaded files, and answers, and what it doesn't protect against yet. This page describes the code as of Phase 8 (2026-11-01). The requirements it follows are in the [specification](../specification/README.md#12-security-privacy-and-operational-requirements). What is stored, logged, and sent, and for how long, is in [privacy and data handling](../privacy/README.md).
 
 The assistant is a portfolio demo of document retrieval, built to run on one computer. It isn't certified for regulated or clinical use, it hasn't been penetration-tested or reviewed by anyone independent, and its answers aren't professional, medical, legal, or financial advice. Upload only public, synthetic, or licensed documents you're allowed to use, and never real patient or confidential data.
 
@@ -13,7 +13,7 @@ The assistant is a portfolio demo of document retrieval, built to run on one com
 | Another site sends requests as the user | The `SameSite=Strict` cookie; a custom header on every state-changing request; explicit CORS origins | `test_errors`, `test_config`, `test_documents_api`, `test_questions_api` |
 | A user reads another user's workspace | Membership checked inside each database query; `404` for other users' items, as for missing ones | `test_isolation_api`, `test_robustness` |
 | An upload is harmful or mislabeled | Size, time, and type limits; the file's bytes checked; random storage names; downloads never shown inline | `test_uploads`, `test_documents_api`, `test_storage` |
-| A file is built to be expensive to read | Page, character, time, and XML-size limits; one document at a time | `test_parsers`, `test_ingestion` |
+| A file is built to be expensive to read | Page, character, time, and XML-size limits; parser child process with a hard timeout and Linux memory limit | `test_parsers`, `test_ingestion` |
 | A document tries to instruct the model | Passages framed as untrusted evidence between random markers; no tools; citations checked | `test_grounding`, `test_robustness`, and the [evaluation](../evaluation/README.md#planted-instructions) |
 | Someone overloads the API | Rate limits; request size and upload time limits; a time limit on the model | `test_rate_limits`, `test_request_body_limit`, `test_uploads`, `test_llm` |
 | Logs or errors give data away | Logs name routes and IDs, not text or names; errors show a plain message and a request ID | `test_logs`, `test_errors`, `test_llm`, `test_questions_api` |
@@ -82,14 +82,14 @@ Files aren't scanned for malware. Each file's SHA-256 hash is recorded, but dupl
 
 ## Reading documents
 
-Text is extracted in the API process's indexing thread, one document at a time, with these limits (D-48):
+Text is extracted by a short-lived parser child process, one document at a time, with these limits (D-48, D-83):
 
-- at most 500 pages (`MAX_DOCUMENT_PAGES`), 2,000,000 characters (`MAX_DOCUMENT_CHARACTERS`), and 120 seconds (`PARSE_TIMEOUT_SECONDS`). The time is checked between pages and paragraphs, so one very slow page can run past it (R-19);
+- at most 500 pages (`MAX_DOCUMENT_PAGES`), 2,000,000 characters (`MAX_DOCUMENT_CHARACTERS`), and 120 seconds (`PARSE_TIMEOUT_SECONDS`). The parent process kills a child that exceeds the wall-clock timeout. On Linux the child has a 1.5 GiB address-space limit; Python's standard library has no equivalent on Windows, so the residual memory risk remains there (R-19);
 - a Word file's XML parts may declare at most 64 MiB in total, checked before parsing. Python's `zipfile` stops reading each part at its declared size, so this bounds the work. python-docx parses the XML without resolving entities;
 - a PDF that needs a password is refused (`document_encrypted`). One encrypted only to restrict printing or editing is read with the empty password. pypdf applies its own decompression limits;
 - a text file is read only up to 4 bytes per allowed character.
 
-Any error from a parsing library is reported as `document_unreadable`, without its details. The details are logged only at `LOG_LEVEL=DEBUG`, because they can quote the document. There is no OCR: a PDF of scanned pages fails with `no_text_found`.
+The child environment contains only the executable search path, required Windows system/temp variables where present, and no `DATABASE_URL` or application secrets. It receives a local storage path and parse limits, and returns bounded extracted text to the worker. Any error from a parsing library is reported as `document_unreadable`, without its details. The details are not sent back to the API logs. There is no OCR: a PDF of scanned pages fails with `no_text_found`.
 
 ## Documents that try to instruct the model
 
@@ -130,7 +130,7 @@ The [API guide](../api/README.md#limits) lists every limit and its setting.
 - Each request gets a new random ID, returned in the `X-Request-ID` header. IDs sent by clients are ignored, so they can't put text into the log.
 - Log lines name requests by their route templates, such as `GET /api/v1/documents/{document_id}`, not by their paths. They leave out client addresses, query strings, passwords, session tokens, email addresses, file names, document text, prompts, replies, and the text of questions and answers. The two exceptions, `DEBUG` logging and tracebacks, are in [privacy](../privacy/README.md#logs).
 - Questions and answers are deleted 3 days after the question was asked (D-55); [privacy](../privacy/README.md#retention-and-deletion) has the details.
-- Metrics are off by default (`METRICS_ENABLED`). When they are on, anyone who can reach the API can read `/metrics`; nginx doesn't forward it.
+- Metrics are off by default (`METRICS_ENABLED`). When they are on, anyone who can reach the API can read `/metrics`, including durable job status counts and queued age; nginx doesn't forward it. The job payload contains document IDs only, never file contents, extracted text, or secrets.
 
 ## The production stack
 
@@ -174,7 +174,7 @@ None of these matter much while the app runs on one computer for one person. Eac
 | Local accounts only | No email verification, password reset, second factor, or single sign-on | An identity provider |
 | No account or workspace deletion | Removing a user means clearing all local data | Endpoints that delete them with their files |
 | No malware scanning or OCR | Uploaded files are stored as they are; scanned PDFs can't be indexed | A scanner before storage; OCR as an indexing step |
-| Text is extracted inside the API process | A crafted file could use a lot of CPU or memory, and one slow page can run past the time limit (R-19) | Extraction in a separate process that can be stopped |
+| Parser resource exhaustion | A crafted file could use substantial CPU or memory. A child process and hard timeout limit the exposure, but Windows has no equivalent parser memory limit (R-19) | Linux applies a child address-space limit; keep the parser child isolated and retain the upload and parse limits |
 | Prompt injection is reduced, not removed | A model can still be steered by a passage that reaches it | The current checks, plus measuring with more planted documents |
 | `/metrics` has no authentication | Anyone who can reach the API could read the counts | Keep it off, or behind the proxy's access control |
 | Nothing is encrypted at rest by the app, and there are no backups | A copy of the disk exposes the documents | Disk encryption, and encrypted backups ([operations](../operations/README.md#backing-up-and-restoring)) |

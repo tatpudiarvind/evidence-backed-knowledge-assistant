@@ -16,6 +16,7 @@ APP_TABLES = (
     "answers",
     "questions",
     "document_chunks",
+    "jobs",
     "documents",
     "workspace_memberships",
     "workspaces",

@@ -5,36 +5,44 @@ A document goes from `queued` to `processing`, then to `ready` with its chunks s
 is left alone. Logs name documents by ID only, never quoting their text.
 """
 
-import io
+import json
 import logging
-import time
+import os
+import subprocess
+import sys
+import threading
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.core.metrics import Metrics
+from app.db.models import Document, Job
 from app.domain.documents import DocumentStatus
 from app.domain.indexing import (
     IndexingError,
     IndexingFailure,
+    TextBlock,
     TextChunk,
     chunk_blocks,
     normalize_blocks,
 )
 from app.providers.embeddings import EmbeddingProvider, EmbeddingUnavailableError, check_vectors
-from app.providers.parsers import ParseLimits, parser_for
+from app.providers.parsers import ParseLimits
 from app.providers.storage import DocumentStorage
 from app.repositories import chunks as chunk_repository
 from app.repositories import documents as document_repository
+from app.repositories import jobs as job_repository
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class _Job:
+    job_id: uuid.UUID
     document_id: uuid.UUID
     storage_key: str
     mime_type: str
@@ -64,79 +72,253 @@ class DocumentIndexer:
         self._chunk_size = settings.chunk_size_characters
         self._chunk_overlap = settings.chunk_overlap_characters
 
+    def listen_for_jobs(self, stopped: threading.Event, wake: Callable[[], None]) -> None:
+        """Listen on a dedicated autocommit connection; polling remains the recovery path."""
+        engine = self._session_factory.kw["bind"]
+        while not stopped.is_set():
+            try:
+                with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+                    connection.exec_driver_sql("LISTEN indexing_jobs")
+                    raw_connection = connection.connection.driver_connection
+                    while not stopped.is_set():
+                        notifications = raw_connection.notifies(timeout=5, stop_after=1)
+                        if next(notifications, None) is not None:
+                            wake()
+            except Exception as error:
+                logger.warning(
+                    "The indexing notification listener paused (%s)", type(error).__name__
+                )
+                stopped.wait(5)
+
     def recover_interrupted(self) -> int:
-        """Queue again the documents left `processing`, as when the server stopped mid-way."""
+        """Reap expired leases; unlike the old startup recovery, live workers retain leases."""
         with self._session_factory() as session:
-            count = document_repository.requeue_processing(session)
+            count = job_repository.reap_expired(session)
+            active = session.execute(
+                select(Job.payload, Job.status).where(Job.status.in_(["queued", "running"]))
+            ).all()
+            active_ids = {
+                payload.get("document_id")
+                for payload, _status in active
+                if isinstance(payload, dict)
+            }
+            running_ids = {
+                payload.get("document_id")
+                for payload, status in active
+                if status == "running" and isinstance(payload, dict)
+            }
+            orphaned = session.scalars(
+                select(Document).where(
+                    Document.status.in_(
+                        [DocumentStatus.QUEUED.value, DocumentStatus.PROCESSING.value]
+                    )
+                )
+            ).all()
+            for document in orphaned:
+                document_key = str(document.id)
+                if document.status == DocumentStatus.PROCESSING and document_key not in running_ids:
+                    document.status = DocumentStatus.QUEUED.value
+                    count += 1
+                if document_key not in active_ids:
+                    document.status = DocumentStatus.QUEUED.value
+                    job_repository.enqueue(session, document.id)
+                    count += 1
             session.commit()
-        if count:
-            logger.info("Queued %d interrupted document(s) to be indexed again", count)
         return count
 
     def process_next(self) -> bool:
-        """Index the oldest queued document. Returns False if none is waiting.
-
-        Errors from the database itself propagate, leaving the document `processing` until
-        `recover_interrupted` queues it again.
-        """
+        """Claim and process one durable job. Claims commit before parsing or embedding."""
+        self.recover_interrupted()
+        worker_id = str(uuid.uuid4())
         with self._session_factory() as session:
-            document = document_repository.claim_next_queued(session)
-            if document is None:
+            job = job_repository.claim(session, worker_id)
+            if job is None:
                 return False
+            try:
+                document_id = uuid.UUID(job.payload["document_id"])
+            except (KeyError, ValueError):
+                job_repository.finish(
+                    session, job.id, worker_id, error_code="ingestion_failed", permanent=True
+                )
+                session.commit()
+                return True
+            document = document_repository.get_by_id(session, document_id, lock=True)
+            if document is None or document.status == DocumentStatus.DELETING:
+                job.status = "cancelled"
+                job.locked_by = None
+                job.locked_until = None
+                session.commit()
+                return True
             document.status = DocumentStatus.PROCESSING.value
-            job = _Job(document.id, document.storage_key, document.mime_type)
+            payload = _Job(job.id, document.id, document.storage_key, document.mime_type)
             session.commit()
-        self._index(job)
-        return True
-
-    def _index(self, job: _Job) -> None:
-        started = time.perf_counter()
+        heartbeat_stop = threading.Event()
+        heartbeat = threading.Thread(
+            target=self._heartbeat, args=(payload.job_id, worker_id, heartbeat_stop), daemon=True
+        )
+        heartbeat.start()
         try:
-            chunks = self._read_chunks(job)
-            embeddings = self._embed(chunks)
-            saved = self._save(job.document_id, chunks, embeddings)
+            chunks = self._read_chunks(payload)
+            vectors = self._embed(chunks)
         except IndexingError as error:
-            cause = f" ({type(error.__cause__).__name__})" if error.__cause__ else ""
             logger.warning(
-                "Indexing document %s failed: %s%s", job.document_id, error.failure.value, cause
+                "Indexing document %s failed: %s", payload.document_id, error.failure.value
             )
-            self._fail(job.document_id, error)
-            return
+            self._record_failure(
+                payload,
+                worker_id,
+                error,
+                permanent=error.failure.value not in job_repository.TEMPORARY_FAILURES,
+            )
         except Exception as error:
             logger.warning(
                 "Indexing document %s failed unexpectedly (%s)",
-                job.document_id,
+                payload.document_id,
                 type(error).__name__,
             )
-            # Error messages can quote a document, so the details are only logged on request.
-            logger.debug("Indexing failure details", exc_info=True)
-            self._fail(job.document_id, IndexingError(IndexingFailure.INGESTION_FAILED))
-            return
-        self._count("indexed" if saved else "discarded")
-        if saved:
-            logger.info(
-                "Indexed document %s: %d chunks in %.1f s",
-                job.document_id,
-                len(chunks),
-                time.perf_counter() - started,
+            self._record_failure(
+                payload, worker_id, IndexingError(IndexingFailure.INGESTION_FAILED), permanent=False
             )
         else:
-            logger.info("Document %s changed while being indexed; discarded", job.document_id)
+            try:
+                self._save(payload, worker_id, chunks, vectors)
+            except Exception as error:
+                logger.warning(
+                    "Indexing document %s failed unexpectedly (%s)",
+                    payload.document_id,
+                    type(error).__name__,
+                )
+                self._record_failure(
+                    payload,
+                    worker_id,
+                    IndexingError(IndexingFailure.INGESTION_FAILED),
+                    permanent=False,
+                )
+        finally:
+            heartbeat_stop.set()
+            heartbeat.join(timeout=2)
+        return True
+
+    def _heartbeat(self, job_id: uuid.UUID, worker_id: str, stopped: threading.Event) -> None:
+        while not stopped.wait(15):
+            try:
+                with self._session_factory() as session:
+                    job_repository.heartbeat(session, job_id, worker_id)
+                    session.commit()
+            except Exception:
+                logger.warning("Indexing lease heartbeat failed (%s)", job_id)
 
     def _read_chunks(self, job: _Job) -> list[TextChunk]:
         try:
             handle = self._storage.open(job.storage_key)
         except FileNotFoundError:
             raise IndexingError(IndexingFailure.FILE_MISSING) from None
-        # Copied into memory so the stored file is closed again at once: on Windows, an open
-        # file can't be deleted. The upload size limit bounds the copy.
-        with handle:
-            data = io.BytesIO(handle.read())
-        blocks = parser_for(job.mime_type, self._limits).extract(data)
-        chunks = chunk_blocks(normalize_blocks(blocks), self._chunk_size, self._chunk_overlap)
-        if not chunks:
-            raise IndexingError(IndexingFailure.NO_TEXT_FOUND)
-        return chunks
+        path, temporary = self._storage.create_temp_file()
+        try:
+            with handle, temporary:
+                temporary.write(handle.read())
+            env = {
+                key: value
+                for key, value in os.environ.items()
+                if key in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP"}
+            }
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "app.parser_process",
+                        str(path),
+                        job.mime_type,
+                        str(self._limits.max_pages),
+                        str(self._limits.max_characters),
+                        str(self._limits.timeout_seconds),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=self._limits.timeout_seconds,
+                    env=env,
+                    cwd=str(__import__("pathlib").Path(__file__).resolve().parents[2]),
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                raise IndexingError(IndexingFailure.PARSE_TIMEOUT) from None
+            if result.returncode != 0:
+                raise IndexingError(IndexingFailure.INGESTION_FAILED)
+            blocks = json.loads(result.stdout)
+            if isinstance(blocks, dict) and "error" in blocks:
+                try:
+                    failure = IndexingFailure(blocks["error"])
+                except ValueError:
+                    failure = IndexingFailure.INGESTION_FAILED
+                raise IndexingError(failure)
+            normalized = normalize_blocks(
+                TextBlock(item["text"], item.get("page_number"), item.get("section"))
+                for item in blocks
+            )
+            chunks = chunk_blocks(normalized, self._chunk_size, self._chunk_overlap)
+            if not chunks:
+                raise IndexingError(IndexingFailure.NO_TEXT_FOUND)
+            return chunks
+        finally:
+            path.unlink(missing_ok=True)
+
+    def _save(
+        self,
+        job: _Job,
+        worker_id: str,
+        chunks: Sequence[TextChunk],
+        vectors: Sequence[Sequence[float]],
+    ) -> bool:
+        with self._session_factory() as session:
+            locked = session.scalar(
+                __import__("sqlalchemy")
+                .select(Job)
+                .where(
+                    Job.id == job.job_id,
+                    Job.status == "running",
+                    Job.locked_by == worker_id,
+                    Job.locked_until > __import__("sqlalchemy").func.now(),
+                )
+                .with_for_update()
+            )
+            document = document_repository.get_by_id(session, job.document_id, lock=True)
+            if locked is None or document is None or document.status != DocumentStatus.PROCESSING:
+                session.rollback()
+                self._count("discarded")
+                return False
+            chunk_repository.replace_for_document(session, job.document_id, chunks, vectors)
+            document.status = DocumentStatus.READY.value
+            document.failure_code = None
+            document.failure_message = None
+            job_repository.finish(session, job.job_id, worker_id)
+            session.commit()
+        self._count("indexed")
+        return True
+
+    def _record_failure(
+        self, job: _Job, worker_id: str, error: IndexingError, *, permanent: bool
+    ) -> None:
+        with self._session_factory() as session:
+            db_job = session.get(Job, job.job_id)
+            if db_job is None or db_job.locked_by != worker_id or db_job.status != "running":
+                self._count("discarded")
+                return
+            accepted = job_repository.finish(
+                session, job.job_id, worker_id, error_code=error.failure.value, permanent=permanent
+            )
+            document = document_repository.get_by_id(session, job.document_id, lock=True)
+            if accepted and document is not None:
+                db_job = session.get(Job, job.job_id)
+                if db_job and db_job.status == "failed":
+                    document.status = DocumentStatus.FAILED.value
+                    document.failure_code = error.failure.value
+                    document.failure_message = error.message
+                elif db_job and db_job.status == "queued":
+                    document.status = DocumentStatus.QUEUED.value
+            session.commit()
+        if accepted:
+            self._count(error.failure.value)
 
     def _embed(self, chunks: Sequence[TextChunk]) -> list[list[float]]:
         try:
@@ -149,40 +331,6 @@ class DocumentIndexer:
             raise IndexingError(IndexingFailure.EMBEDDING_FAILED)
         return embeddings
 
-    def _save(
-        self,
-        document_id: uuid.UUID,
-        chunks: Sequence[TextChunk],
-        embeddings: Sequence[Sequence[float]],
-    ) -> bool:
-        with self._session_factory() as session:
-            document = document_repository.get_by_id(session, document_id, lock=True)
-            # Deleted, or being deleted, while it was indexed.
-            if document is None or document.status != DocumentStatus.PROCESSING:
-                return False
-            chunk_repository.replace_for_document(session, document_id, chunks, embeddings)
-            document.status = DocumentStatus.READY.value
-            document.failure_code = None
-            document.failure_message = None
-            session.commit()
-        return True
-
-    def _fail(self, document_id: uuid.UUID, error: IndexingError) -> None:
-        marked = self._mark_failed(document_id, error)
-        self._count(error.failure.value if marked else "discarded")
-
     def _count(self, outcome: str) -> None:
         if self._metrics is not None:
             self._metrics.count_indexing(outcome)
-
-    def _mark_failed(self, document_id: uuid.UUID, error: IndexingError) -> bool:
-        """Returns False, changing nothing, if the document was deleted or changed meanwhile."""
-        with self._session_factory() as session:
-            document = document_repository.get_by_id(session, document_id, lock=True)
-            if document is None or document.status != DocumentStatus.PROCESSING:
-                return False
-            document.status = DocumentStatus.FAILED.value
-            document.failure_code = error.failure.value
-            document.failure_message = error.message
-            session.commit()
-        return True

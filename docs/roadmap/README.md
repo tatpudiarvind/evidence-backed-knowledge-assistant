@@ -1,6 +1,6 @@
 # Roadmap: later features
 
-The plan for four features that the [specification](../specification/README.md#15-decisions-intentionally-deferred) left for later: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider. It was written on 2026-10-31, after Phases 0 to 6. [Phase 7](#phase-7--hybrid-search-and-reranking) has since been built, but isn't finished, and **Phases 8 to 10 haven't been built yet**. The order, Phases 7 to 10, is the owner's choice (D-80). The tasks are in the [task tracker](../tracker/01-task-tracker.md), and the decisions and risks named here, such as PD-09 and R-27, are in [decisions, risks, and issues](../tracker/03-decisions-risks-issues.md).
+The plan for four features that the [specification](../specification/README.md#15-decisions-intentionally-deferred) left for later: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider. It was written on 2026-10-31, after Phases 0 to 6. [Phase 7](#phase-7--hybrid-search-and-reranking) has since been built, but isn't finished. Phase 8 is implemented with local checks passed and branch CI pending; Phases 9 and 10 haven't been built yet. The order, Phases 7 to 10, is the owner's choice (D-80). The tasks are in the [task tracker](../tracker/01-task-tracker.md), and the decisions and risks named here, such as PD-09 and R-27, are in [decisions, risks, and issues](../tracker/03-decisions-risks-issues.md).
 
 > **This is a plan, not a result.** Each phase opens with a decision task that confirms or changes the design below. A feature that changes what users get, or adds a process or a cost, keeps today's behavior by default until a measurement, a test, or a review supports changing it. The plan promises no numbers: a result is reported only after it has been measured, with the conditions it was measured under.
 
@@ -9,7 +9,7 @@ The plan for four features that the [specification](../specification/README.md#1
 | Phase | Feature | What it adds | Settles | Off by default | Remarks |
 |---|---|---|---|---|---|
 | 7 | Hybrid search and reranking | Keyword search next to the vector search, the two lists merged by reciprocal rank fusion, and an optional model that reorders the passages | PD-09 | Yes: `RETRIEVAL_MODE=vector` | Judged on new questions that no setting was chosen with |
-| 8 | A durable queue for indexing | A `jobs` table in PostgreSQL with leases, attempts, and retries; parsing in a child process that can be stopped; an optional worker process | PD-08 | Partly: the queue replaces how documents are claimed, and `INDEXING_RUNNER=embedded` keeps a single process | PostgreSQL is the queue, so no new service is needed |
+| 8 | A durable queue for indexing | A `jobs` table in PostgreSQL with leases, attempts, and retries; parsing in a child process that can be stopped; an optional worker process | PD-08 | `INDEXING_RUNNER=embedded` remains the default; `worker` is opt-in | Implemented; local checks passed; branch CI pending. PostgreSQL is the queue, so no new service is needed |
 | 9 | A hosted language model | An adapter for OpenAI-compatible chat APIs, a daily limit on hosted calls, and a notice saying where questions go | PD-06 | Yes: `LLM_PROVIDER` stays `ollama` | No hosted call before the owner approves a vendor and its cost |
 | 10 | Sign-in through a provider | Sign-in through one configured OpenID Connect provider, with the API as the client | PD-10 | Yes: `AUTH_MODE=local` | One provider per deployment, not enterprise single sign-on |
 
@@ -125,6 +125,8 @@ Not in this phase: tuning the HNSW index, another embedding model, languages oth
 
 Settles PD-08. Tasks: [Phase 8 in the task tracker](../tracker/01-task-tracker.md#phase-8--a-durable-queue-for-indexing).
 
+**Status on 2026-11-01:** implemented; local backend checks and the manual worker-interruption recovery check passed. Branch CI is pending. One Windows memory sample during indexing used 134.4 MiB working set for the API and 762.7 MiB for the worker (private bytes: 852.6 MiB and 2,312.4 MiB respectively); this is one observation, not a benchmark. Worker mode remains opt-in. Compose was not run locally.
+
 ### Why
 
 Today a thread inside the API indexes documents one at a time ([background work](../architecture/README.md#background-work), D-45). It claims the oldest queued document with `FOR UPDATE SKIP LOCKED`, and it's woken when a file is uploaded, or checks again every 5 seconds. That's enough for one person on one computer, but it has gaps:
@@ -133,7 +135,7 @@ Today a thread inside the API indexes documents one at a time ([background work]
 |---|---|---|
 | No lease | A document stays `processing` until the thread finishes with it. If the API stops, only its next start queues the document again | D-45 |
 | No count of attempts | A file that crashes the API is tried again at every start | Nothing ends the loop |
-| Parsing can't be stopped | Text is extracted inside the API process, so a slow page can run past the time limit, and a crafted file can use a lot of memory | R-19. The endless loop fixed in pypdf 6.21.4 (I-42) was this kind of problem |
+| Parser resource limits | Parsing now runs in a child process that the parent kills at the wall-clock timeout. Windows has no equivalent memory limit, so a crafted file can still use substantial memory | R-19. The endless loop fixed in pypdf 6.21.4 (I-42) was this kind of problem |
 | Shared resources | Indexing takes the API's CPU time and memory while people ask questions | Embedding runs on the CPU |
 | No automatic retry | A temporary failure leaves the document `failed` until the user selects Retry | The user sees the failure's code |
 
@@ -156,11 +158,11 @@ The work is held in a `jobs` table in PostgreSQL:
 
 - **Claiming.** A worker takes the oldest due job with one `UPDATE … RETURNING`, whose subquery locks the job with `FOR UPDATE SKIP LOCKED`, as the indexing thread does today. The same statement sets the lease and counts the attempt, and the worker commits before it starts the work. Two workers never get the same job.
 - **Leases and fencing.** A heartbeat extends `locked_until` while the work runs. The worker saves the passages and finishes the job in one transaction, which first locks the job's row and checks that the worker still holds the lease. If it doesn't, the work is thrown away, so a worker that was too slow can't overwrite one that took over. A reaper queues jobs with an expired lease again, or fails them when no attempts are left. It replaces today's requeue at start.
-- **Retries.** A temporary error queues the job again after a delay that grows with each attempt, with a random part (jitter) so retries don't arrive together. A permanent error, such as a file that can't be read, fails the job at once. P8-01 decides which failure codes are temporary.
+- **Retries (D-83).** `embedding_unavailable`, `embedding_failed`, `ingestion_failed`, and `parse_timeout` are retried; file-specific parse failures are terminal. An attempt means a worker start. Five starts are allowed. The retry delay starts at 5 seconds, doubles for each failed attempt, is capped at 300 seconds, and gets plus or minus 20% random jitter. `worker_crashed` and `lease_expired` are internal recovery codes, not user-facing parser errors.
 - **Queuing in the same transaction.** An upload or a Retry inserts the job and sends `NOTIFY` in the transaction that changes the document. PostgreSQL delivers the notification only if that transaction commits ([NOTIFY](https://www.postgresql.org/docs/16/sql-notify.html)), so there's never a job without its document, or a wake-up for work that was rolled back. Deleting a document cancels its unfinished jobs in the same transaction.
 - **What users see doesn't change.** A document is still `queued` while its job waits, including between retries, and `processing` while it runs, and then it's `ready`, or `failed` with a code.
 - **Parsing in a child process.** The worker runs the parser as a separate Python process, started with `subprocess`. The child gets only the stored file's path and a minimal environment, without `DATABASE_URL` or any other secret, and sends back the text of each page. At the time limit, the worker kills it. On Linux, including in containers, the child also gets a memory limit; Python's standard library has no equivalent on Windows. A fresh process shares nothing with the worker, which also keeps database connections out of it: psycopg's connections "are not process-safe" ([concurrent operations](https://www.psycopg.org/psycopg3/docs/advanced/async.html#concurrent-operations)).
-- **The worker.** `python -m app.worker` loads the embedding model and waits for jobs. It runs `LISTEN` on a connection of its own, in autocommit mode, so an open transaction never holds a notification back ([notifications](https://www.psycopg.org/psycopg3/docs/advanced/async.html#asynchronous-notifications)). It also checks the table every few seconds, because a notification sent while no one is listening is lost. With `INDEXING_RUNNER=embedded`, the default at first, the same loop runs in a thread inside the API, so one process is still enough on this computer. With `worker`, indexing and the hourly cleanup move to the worker process. The worker loads its own copy of the embedding model, so P8-05 measures the memory the two processes use.
+- **The worker.** `python -m app.worker` runs the indexing loop and hourly cleanup. It listens for `NOTIFY` on its own autocommit connection and polls every 5 seconds as a recovery path. With `INDEXING_RUNNER=embedded` (the default), the loop remains in an API thread; `worker` runs it in a separate process. The worker loads its own embedding model, so memory is a deployment consideration. The implementation uses a 60-second lease and heartbeats every 15 seconds (D-83).
 - **The API stays one process,** so its in-memory rate limits still hold.
 - **Metrics.** When `/metrics` is read, the API counts jobs by status and reports the age of the oldest queued job, from the `jobs` table, so the worker needs no port of its own.
 - **Compose and CI.** Compose gets a `worker` service built from the backend image, and CI's compose smoke and end-to-end jobs run with it. On this computer, the app still runs without containers (D-31).
@@ -221,16 +223,16 @@ sequenceDiagram
 
 | Option | Why not now | Remarks |
 |---|---|---|
-| procrastinate, a PostgreSQL task queue for Python (MIT) | Less code to write, but it brings its own tables, worker, and conventions, more than one kind of job needs | P8-01 can still choose it |
+| procrastinate, a PostgreSQL task queue for Python (MIT) | Less code to write, but it brings its own tables, worker, and conventions, more than one kind of job needs | Rejected by D-83; one job kind does not justify another dependency |
 | Celery or RQ, with Redis | A second service to run and secure, against the local-first rule | Common in larger Python apps |
 | A cloud queue | Needs a cloud account, and the cloud is deferred (PD-07) | Possible after a deployment decision |
 | Kafka | The specification adds it only for a measured need, and one kind of job isn't one | Built for far larger streams of events |
-| The smallest fix: a lease and an attempt count on the document, kept in the API's thread | Least code, and parsing could still move to a child process | P8-01 chooses it if the `jobs` table isn't worth its code |
+| The smallest fix: a lease and an attempt count on the document, kept in the API's thread | Least code, and parsing could still move to a child process | Rejected by D-83: the jobs table also supports separate workers and deduplication |
 
 ### Risks
 
-- **R-19** is the risk this phase reduces: once parsing runs in a child process that can be killed, R-19 can be closed.
-- **Memory.** Two processes each load the embedding model. P8-05 measures it before the worker becomes the default anywhere.
+- **R-19** is partly mitigated: the parser now runs in a child process with a hard timeout and a Linux address-space limit. Windows has no equivalent memory limit in this implementation, so R-19 remains open.
+- **Memory.** Worker mode loads another copy of the embedding model. Measure both processes before considering a different default; `embedded` remains the default.
 - **R-24** doesn't change: questions are still answered within the request.
 
 ### Done when

@@ -57,14 +57,14 @@ The portfolio goal is to turn the existing enterprise knowledge-assistant experi
 | Embeddings | Sentence Transformers with `BAAI/bge-small-en-v1.5` (384 dimensions, MIT) on CPU, pinned to one revision: downloaded once with `python -m app.cli download-embedding-model`, then loaded without a network. `all-MiniLM-L6-v2` (384 dimensions, Apache-2.0) is the fallback | Local, repeatable, no per-call API bill. The model and its revision are pinned in the backend settings and left out of `.env.example` on purpose: vectors from different models don't match, and the vector column holds exactly 384 values, so another model means indexing every document again, plus a new migration if its vector size differs. Tests use a deterministic fake embedder, apart from one test with the real model. |
 | LLM | Provider interface; local Ollama adapter (default model Qwen3-4B-Instruct-2507, Apache-2.0, pinned as the Ollama tag `qwen3:4b-instruct-2507-q4_K_M`), called only by the backend, through Ollama's chat API at temperature 0 and with no tools offered; search-only mode (cited passages, no generated text) when no model is configured (`LLM_PROVIDER=none`) or the model doesn't reply; optional hosted adapter later | Local development avoids mandatory paid API; hosted provider is opt-in and clearly disclosed. Without a model, questions still return the passages that match. |
 | Retrieval | pgvector cosine similarity through the HNSW index, limited to the ready documents of the workspace asked about, and only for its members: the 4 closest passages (`RETRIEVAL_TOP_K`), of which those with a similarity of at least 0.5 (`RETRIEVAL_MIN_SIMILARITY`) count as evidence. Since Phase 7, `RETRIEVAL_MODE` can also be `hybrid`, which adds PostgreSQL full-text search for the question's words over the same scope and merges the two rankings by reciprocal rank fusion, or `hybrid_rerank`, which then has a local cross-encoder, `cross-encoder/ms-marco-MiniLM-L6-v2`, reorder the merged passages; `vector` stays the default | Simple measurable first implementation; avoid premature complexity. Both numbers were chosen in Phase 5 from the evaluation, by rules fixed before it ran ([evaluation](../evaluation/README.md#choosing-the-settings)). `hybrid` tied with `vector` on a held-out question set, under a rule fixed before any run, so the simpler search stays the default; `hybrid_rerank` hasn't been measured. The reranker is licensed Apache-2.0, but it was trained on MS MARCO, whose terms allow non-commercial research use only; `BAAI/bge-reranker-base`, licensed MIT, is the alternative for commercial use, untried here ([search modes](../evaluation/README.md#search-modes-and-the-held-out-set-phase-7)). |
-| Ingestion | A background worker thread in the API process takes the oldest queued document from PostgreSQL (`FOR UPDATE SKIP LOCKED`); uploads and retries wake it, and it also checks every 5 seconds | Keeps slow parsing out of the HTTP request path without a separate service or queue. Run a single API process, because each process would start its own worker; documents left `processing` when the server stopped are queued again at the next start. If reliability requires a durable queue, add one later with tests and rationale (§15). |
+| Ingestion | A PostgreSQL `jobs` table is the durable queue. Upload and Retry enqueue in the document transaction and send `NOTIFY`; workers claim due jobs with `FOR UPDATE SKIP LOCKED`, a 60-second lease, and a 15-second heartbeat. `INDEXING_RUNNER=embedded` (default) runs the worker in the API; `worker` uses `python -m app.worker` | PostgreSQL remains the only queue service. Fencing prevents a worker with an expired lease from saving; a reaper recovers expired jobs. Retries use bounded exponential backoff and jitter, and the parser is a time-limited child process with a minimal environment. The API remains one process for its in-memory rate limits. See D-83 and the [architecture guide](../architecture/README.md#background-work). |
 | Local runtime | Docker Compose: API, UI, PostgreSQL/pgvector. Ollama is optional and runs outside Compose; the Compose API answers with the matching passages unless it is configured to reach Ollama (see the quickstart) | Reproducible local environment; local model resource needs depend on the developer's machine. |
 | Observability | Python's standard logging, as text or one JSON object per line (`LOG_FORMAT`): one line per request with its route template, status, and duration, and every line logged during a request tagged with its ID; counters in Prometheus's format at `/metrics` (prometheus-client), served only when `METRICS_ENABLED=true` | Enough to find a reported error and see what the API does, without logging document text, prompts, or questions and answers. No tracing or log shipping in the MVP. |
 | Test/quality | pytest, HTTPX, Ruff, mypy or pyright, Vitest/React Testing Library, Playwright smoke path | Verify business behavior, not only line coverage. |
 | CI | GitHub Actions | On every push and pull request: lint, type checks, tests, the build, the search-only evaluation, a Compose smoke test, and an audit of the locked dependencies, which also runs weekly. No secrets required for core CI. |
 | Cloud (later) | One provider only, likely AWS if target vacancies support it | Use managed Postgres, object storage, and container hosting only after local MVP works; monitor costs and destroy resources when not needed. |
 
-**Architecture style:** modular monolith, with `api`, `documents`, `ingestion`, `retrieval`, `generation`, `auth`, and `persistence` modules. The provider interfaces make later substitutions testable without creating a network of services. The initial source of truth for document status and metadata is PostgreSQL. For the MVP, files can live in a local data volume; cloud object storage is a later adapter, not a dependency.
+**Architecture style:** modular monolith, with `api`, `documents`, `ingestion`, `retrieval`, `generation`, `auth`, and `persistence` modules. The provider interfaces make later substitutions testable without creating a network of services. The source of truth for document status, metadata, and durable indexing jobs is PostgreSQL. For the MVP, files can live in a local data volume; cloud object storage is a later adapter, not a dependency.
 
 **Phase 0 choices (2026-10-28):** the authentication, document parsing, embeddings, and LLM rows above record the chosen configuration. Users upload whichever documents they are allowed to use; the repository ships only synthetic sample documents written for this project. Licenses, alternatives, and open points are in the [decision log](../tracker/03-decisions-risks-issues.md).
 
@@ -77,8 +77,8 @@ flowchart LR
     API --> AUTH[Authentication and workspace authorization]
     API --> DOC[Document service]
     API --> QA[Question-answer service]
-    DOC --> ING[Ingestion worker thread]
-    ING --> PARSE[Parser and chunker]
+    DOC --> ING[Durable indexing worker: embedded or standalone]
+    ING --> PARSE[Isolated parser child process]
     PARSE --> EMB[Embedding provider]
     QA --> RET[Retriever]
     QA --> EMB
@@ -87,7 +87,7 @@ flowchart LR
     DOC --> DB
     ING --> DB
     QA --> DB
-    API --> CLEAN[Question cleanup thread]
+    API --> CLEAN[Question cleanup in selected runner]
     CLEAN --> DB
     API --> STORE[(Local file volume in MVP)]
     QA --> LLM[LLM provider interface]
@@ -112,9 +112,9 @@ sequenceDiagram
     participant DS as DocumentService
     participant FS as Local file storage
     participant DB as PostgreSQL/pgvector
-    participant Worker as Ingestion worker thread
+    participant Worker as Ingestion worker (embedded or standalone)
     participant Ing as IngestionService
-    participant Parser as Parser
+    participant Parser as Parser child process
     participant Chunker as Chunker
     participant Embed as EmbeddingProvider
 
@@ -125,13 +125,13 @@ sequenceDiagram
     API->>DS: create_document(file, workspace)
     DS->>DS: Validate extension, content signature, size, and quota
     DS->>FS: Store under a generated opaque key
-    DS->>DB: Insert document (status=queued) and commit
-    API->>Worker: Wake up
+    DS->>DB: Insert document and job, send NOTIFY, then commit
+    DB-->>Worker: Notification after commit (or 5-second poll)
     API-->>UI: 202 Accepted + document ID + queued state
-    Worker->>DB: Claim the oldest queued document (FOR UPDATE SKIP LOCKED), set processing
+    Worker->>DB: Claim due job with SKIP LOCKED; lease and mark processing
     Worker->>Ing: Index the claimed document
     Ing->>FS: Read the stored file into memory
-    Ing->>Parser: Extract text and page/section metadata within page, text, and time limits
+    Ing->>Parser: Start isolated child with path, limits, and minimal environment
     Parser-->>Ing: Text blocks, or a safe failure code
     Ing->>Chunker: Normalize text and split it with the configured size and overlap
     Chunker-->>Ing: Ordered chunks with source locations
@@ -152,13 +152,13 @@ sequenceDiagram
       UI->>API: POST /api/v1/documents/{id}/retry
       API->>Auth: Validate identity
       API->>DS: Retry the document for this user
-      DS->>DB: Find it only through the user's workspace membership, set queued, clear the failure
-      API->>Worker: Wake up
+      DS->>DB: Find through membership; set queued, add job, NOTIFY, commit
+      DB-->>Worker: Notification after commit (or 5-second poll)
       API-->>UI: 202 Accepted + queued state
     end
 ```
 
-Implementation note: the upload returns as soon as the file is stored and the document is queued. The worker is a thread in the API process (§4), and the web app checks the document list every 2.5 seconds while any document is queued or processing; server-sent events could replace this polling later. Indexing never downloads anything: the embedding model is downloaded once beforehand (see the quickstart), and without it documents fail with a message saying so. Each failure marks the document `failed` with one of ten safe failure codes and a message that says what to do (listed in the [project reference](../tracker/05-project-reference.md#indexing-failure-codes)). Logs name the document ID, the failure code, and the error type; fuller details, which could quote the document, appear only at debug level. Retries are idempotent: indexing replaces a document's chunks in one transaction, so a retry never duplicates them, and a document deleted while it was being indexed keeps no chunks.
+Implementation note: the upload returns as soon as the file and durable job are committed. The embedded worker runs in a thread inside the API by default; `INDEXING_RUNNER=worker` runs it as `python -m app.worker`. Upload and Retry enqueue in the same transaction as the document state and send a PostgreSQL notification after commit; workers also poll every 5 seconds. The parser runs in a child process with a minimal environment, a hard timeout, and a Linux memory limit. Each failure marks the document `failed` with one of ten safe failure codes and a message that says what to do (listed in the [project reference](../tracker/05-project-reference.md#indexing-failure-codes)). The child reports only a safe failure code; logs name the document ID, failure code, and error type, never document text. Indexing replaces a document's chunks in one transaction after fencing on its current lease, so a stale worker cannot save or duplicate chunks; a deleted document keeps no chunks.
 
 ### 6.2 Question answering
 
@@ -255,7 +255,7 @@ evidence-backed-knowledge-assistant/
       services/               # auth, workspace, document, ingestion, and question use cases
       repositories/           # SQLAlchemy persistence adapters, including chunks and questions
       providers/              # storage, parser, embedding, and language-model (Ollama) adapters
-      workers/                # background threads in the API process: ingestion, question cleanup
+      workers/                # indexing and question cleanup loops (embedded or standalone)
     alembic/                  # Alembic migrations (alembic.ini beside it)
     models/                   # downloaded embedding model (git-ignored)
     storage/                  # uploaded files when the API runs on the host (git-ignored)
@@ -475,6 +475,7 @@ In this diagram, `ChunkRepository.search_workspace` plays the retriever of §5 a
 - `workspaces`: ID, name, owner ID, created timestamp.
 - `workspace_memberships`: workspace ID, user ID, role, unique constraint on the pair.
 - `documents`: ID, workspace ID, original display name, opaque storage key, MIME type, byte size, SHA-256, status, safe failure code/message, timestamps.
+- `jobs`: UUID, kind (`index_document`), JSON payload with IDs only, status, due time, attempts and limit, worker/lease fields, unfinished-work dedupe key, last safe error code, and timestamps. Migration `0007` backfills queued work from earlier versions.
 - `document_chunks`: ID, document ID, ordinal (reading order), text, page number (PDF) or section heading (DOCX), a 384-dimension embedding vector, a `tsvector` of the text that PostgreSQL generates and stores with its English configuration (Phase 7), created timestamp. Unique per document and ordinal, which also indexes the foreign key; deleted with their document. Vector search uses an HNSW index on cosine distance with pgvector's default settings, and keyword search a GIN index on the `tsvector`; revisit the index choice against the measured dataset size and evaluation results.
 - `questions`, `answers`, `citations`: store only what is needed for usability/evaluation, and delete it 3 days (72 hours) after the question was asked. A question records who asked it, its workspace, its text (tidied onto one line, 1 to 1000 characters), and when it was asked. Its one answer records the mode (`generated` by a model, or `search_only`), the text (only for a generated answer that doesn't abstain), the abstention reason if any (`no_indexed_documents`, `weak_evidence`, `insufficient_evidence`, or `uncited_answer`), and the model asked, if any; database checks keep these consistent. Each citation records its number in the answer ([1], [2], and so on), the document, the chunk (and so its page or section), and the chunk's similarity to the question when it was asked. Only the user who asked can see a question. Expired questions are never returned, even before the cleanup has run, and the cleanup runs when the API starts and then every hour. Deleting a document also deletes the questions whose answers cite it, because an answer can quote its sources, and deleting a workspace deletes its questions. Question and answer text is never logged.
 
@@ -500,7 +501,7 @@ Limits: sign-in attempts and registrations are counted per network address (10 a
 
 ## 10. Implementation roadmap and definition of done
 
-Phases 7 to 10 take up four of the decisions deferred in §15, and the [roadmap](../roadmap/README.md) describes the design, the evaluation, and the risks of each. Phase 7 is built and partly measured; Phases 8 to 10 are planned, not built.
+Phases 7 to 10 take up four of the decisions deferred in section 15, and the [roadmap](../roadmap/README.md) describes the design, evaluation, and risks of each. Phase 7 is built and partly measured; Phase 8 is implemented, its local checks passed, and branch CI is pending. Worker mode remains opt-in; its one-sample memory result is recorded in the tracker. Linux applies a parser memory limit; Windows does not, so R-19 remains partly open. Phases 9 and 10 are planned, not built.
 
 ### Phase 0 — Confirm environment and decisions
 - Check Python/Node/Docker versions and available memory/disk before choosing local model sizes.
@@ -546,11 +547,12 @@ Phases 7 to 10 take up four of the decisions deferred in §15, and the [roadmap]
 - **Outcome so far:** `RETRIEVAL_MODE` selects `vector`, `hybrid`, or `hybrid_rerank`, and the keyword search reads a `tsvector` column that PostgreSQL generates from each chunk's text, through a GIN index. On the held-out set, the 4 kept passages stated every expected fact for 42 of its 44 questions with facts in both `vector` and `hybrid` modes, short of the margin of 2 fixed in advance, so vector search stays the default. Not done yet: `hybrid_rerank` is unmeasured, because its model couldn't be downloaded on the computer used; the held-out set was used before the owner reviewed it, but he approved it unchanged, so the runs stand; Phase 7 passed CI on 2026-11-01. The [evaluation](../evaluation/README.md#search-modes-and-the-held-out-set-phase-7) gives the results and their conditions.
 - **Plan:** [Phase 7 in the roadmap](../roadmap/README.md#phase-7--hybrid-search-and-reranking).
 
-### Phase 8 — A durable queue for indexing (planned)
-- Hold indexing work in a PostgreSQL `jobs` table, with leases, attempt counts, and retries with backoff; parse files in a child process that can be stopped at the time limit; and offer an optional worker process.
-- Add no new service (no Redis, Kafka, or other message broker), keep a single process by default, and keep the document statuses users see.
-- **Done when:** killing the worker while it indexes loses no document and saves no passage twice, a parser that hangs or crashes can't keep other documents waiting, and the queue's depth is in the metrics.
-- **Plan:** [Phase 8 in the roadmap](../roadmap/README.md#phase-8--a-durable-queue-for-indexing).
+### Phase 8 — A durable queue for indexing (implemented; local checks passed; CI pending)
+- Migration `0007` adds the PostgreSQL `jobs` table, backfills queued work, and supports deduplication, leases, heartbeats, fencing, a reaper, retries, and cancellation on document deletion (D-83).
+- `INDEXING_RUNNER=embedded` remains the default; `worker` starts `python -m app.worker`. Parsing runs in a child process with a minimal environment, a hard timeout, and a Linux memory limit. Windows has no equivalent parser memory limit here.
+- Jobs appear in `/metrics`. Compose has an optional `worker` profile; CI explicitly enables it. Compose was not run locally because no container runtime is available (D-31).
+- Automated queue and parser-child failure tests pass. A live Windows check killed the worker while indexing; lease recovery completed the job on its second attempt with 850 distinct chunk ordinals. In one sample during indexing, the API used 134.4 MiB working set and 852.6 MiB private bytes; the worker used 762.7 MiB working set and 2,312.4 MiB private bytes. One observation, not a benchmark; worker mode stays opt-in. Compose was not run locally; CI verification is pending.
+- **Plan and design record:** [Phase 8 in the roadmap](../roadmap/README.md#phase-8--a-durable-queue-for-indexing).
 
 ### Phase 9 — A hosted language model (planned)
 - Add an adapter for OpenAI-compatible chat APIs behind the language-model interface, with the same prompt, limits, and citation check, built and tested against a local endpoint first.
@@ -576,7 +578,7 @@ Phases 7 to 10 take up four of the decisions deferred in §15, and the [roadmap]
 
 ## 12. Security, privacy, and operational requirements
 
-- Treat all file names, MIME headers, document text, questions, and model output as untrusted.
+- Treat all file names, MIME headers, document text, questions, and model output as untrusted. Run parsing in a separate process with a minimal environment and hard timeout; apply a memory limit on Linux. Windows has no equivalent parser memory limit in this implementation (Phase 8, D-83; R-19 remains open).
 - Enforce identity and workspace authorization in service/repository queries, not only in the UI.
 - Use server-generated storage keys; prevent path traversal; limit file size, page count, extracted text, and parsing time; guard against decompression bombs and malformed files.
 - Store secrets in environment/secret manager, never in Git or frontend bundles. Keep logs free of secrets, full document content, question and answer text, and unnecessary personal data.
@@ -608,12 +610,12 @@ Resume bullet template (replace brackets with verified values): “Built a Pytho
 
 ## 15. Decisions intentionally deferred
 
-Four of these now have a plan, Phases 7 to 10 in the [roadmap](../roadmap/README.md). Each phase opens with a decision, and today's behavior stays the default until a measurement, a test, or a review supports a change. Phase 7 is built, and kept vector search as the default, but its reranking mode is still unmeasured; Phases 8 to 10 aren't built or settled yet. The cloud, replacing the default local model, and answering outside the request stay deferred.
+Four of these have a plan, Phases 7 to 10 in the [roadmap](../roadmap/README.md). Phase 7 is built and partly measured; Phase 8 is implemented, with CI pending, and its worker mode remains opt-in pending a manual kill check and memory measurement. Phases 9 and 10 are planned, not built.
 
 - Hosted model vendor and exact model, based on privacy, cost, availability, and evaluation. Planned as [Phase 9](../roadmap/README.md#phase-9--a-hosted-language-model); no vendor is chosen without the owner's approval of its terms and cost.
 - Whether a newer, permissively licensed small model should replace the default local model (`qwen3:4b-instruct-2507-q4_K_M`), based on evaluation.
 - Cloud provider and deployment service, pending current target-job research and cost estimate.
-- Whether durable queueing is needed, based on observed ingestion reliability and workload. Planned as [Phase 8](../roadmap/README.md#phase-8--a-durable-queue-for-indexing), with PostgreSQL as the queue.
+- Whether worker mode should become the default, after measuring memory use of the API and worker together; `embedded` remains the default (D-83).
 - Whether answers should be written outside the HTTP request (a queue, or streamed replies), if waiting for the model holds up the API.
 - Keyword/hybrid search, reranking, and additional vector index tuning, based on evaluation evidence. Hybrid search and reranking were built in [Phase 7](../roadmap/README.md#phase-7--hybrid-search-and-reranking) and are available as settings: `hybrid` tied with vector search on the held-out set, so vector search stays the default, and whether reranking helps waits until its model can be downloaded and measured ([the choice](../evaluation/README.md#the-choice)). Index tuning stays deferred.
 - Re-tuning the evidence threshold (0.5) and the number of passages per question (4), which Phase 5 chose using the same questions it scored them on, once a larger, independently reviewed question set exists. Phase 7's held-out set checked them without re-tuning them: Phase 5's rules would choose 6 passages and the same threshold on it, but changing a setting is a decision of its own ([the held-out set with the model](../evaluation/README.md#the-held-out-set-with-the-model)).
@@ -625,7 +627,7 @@ The first coding milestone should be **Phase 1 only**: create a clean repository
 
 ## Local quickstart
 
-What works today (Phases 1 to 6, and Phase 7's search modes): create a local account and workspaces, then upload, list, download, and delete PDF, Word (.docx), and plain-text files. Each uploaded document is indexed in the background: its text is extracted, split into chunks, and embedded with a local model, while its status moves from **Queued** through **Processing** to **Ready**. A document that can't be indexed shows **Failed**, a message that says what to do, and a **Retry** button. Once a document is **Ready**, ask questions about the workspace's documents. With a local Ollama model, the answer is written from the closest passages and cites them by document and page or section; without one, the closest passages are the answer. When the documents don't cover a question, you're told so instead of getting a guess. Passages are found by meaning; `RETRIEVAL_MODE=hybrid` also matches the question's words, and `hybrid_rerank` then reorders the passages with a reranker, downloaded once with `python -m app.cli download-reranker-model`. Questions and answers are deleted after 3 days, or sooner if you delete a document they cite. Retrieval and answers were measured on small synthetic sets; the [evaluation](../evaluation/README.md) gives the numbers and the conditions they hold under. Upload only documents you are allowed to use, and never real patient or confidential data.
+What works today (Phases 1 to 8, and Phase 7's search modes): create a local account and workspaces, then upload, list, download, and delete PDF, Word (.docx), and plain-text files. Each upload is durably queued in PostgreSQL and indexed in the background: its text is extracted in a time-limited child process, split into chunks, and embedded with a local model, while its status moves from **Queued** through **Processing** to **Ready**. `INDEXING_RUNNER=embedded` keeps the current one-process behavior; the optional `worker` runner is available when memory permits. A document that can't be indexed shows **Failed**, a message that says what to do, and a **Retry** button. Once a document is **Ready**, ask questions about the workspace's documents. With a local Ollama model, the answer is written from the closest passages and cites them by document and page or section; without one, the closest passages are the answer. When the documents don't cover a question, you're told so instead of getting a guess. Passages are found by meaning; `RETRIEVAL_MODE=hybrid` also matches the question's words, and `hybrid_rerank` then reorders the passages with a reranker, downloaded once with `python -m app.cli download-reranker-model`. Questions and answers are deleted after 3 days, or sooner if you delete a document they cite. Retrieval and answers were measured on small synthetic sets; the [evaluation](../evaluation/README.md) gives the numbers and the conditions they hold under. Upload only documents you are allowed to use, and never real patient or confidential data.
 
 From the project root, copy `.env.example` to `.env`; Docker Compose, the API, and the Vite dev server all take their settings from this one file. Then run:
 

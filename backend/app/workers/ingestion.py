@@ -34,6 +34,7 @@ class IngestionWorker:
         self._wake = threading.Event()
         self._stopping = threading.Event()
         self._thread: threading.Thread | None = None
+        self._listener: threading.Thread | None = None
 
     @property
     def running(self) -> bool:
@@ -45,6 +46,15 @@ class IngestionWorker:
         self._stopping.clear()
         self._thread = threading.Thread(target=self._run, name="ingestion-worker", daemon=True)
         self._thread.start()
+        listen = getattr(self._indexer, "listen_for_jobs", None)
+        if callable(listen):
+            self._listener = threading.Thread(
+                target=listen,
+                args=(self._stopping, self.notify),
+                name="indexing-notifications",
+                daemon=True,
+            )
+            self._listener.start()
 
     def notify(self) -> None:
         """Look for queued documents now rather than at the next check."""
@@ -58,8 +68,11 @@ class IngestionWorker:
         self._wake.set()
         thread.join(timeout)
         if thread.is_alive():
-            # It ends with the process; the next start queues its document again.
             logger.warning("The ingestion worker was still indexing a document when stopped")
+        listener = self._listener
+        if listener is not None:
+            listener.join(min(timeout, 6.0))
+        self._listener = None
         self._thread = None
 
     def _run(self) -> None:

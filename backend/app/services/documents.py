@@ -19,6 +19,7 @@ from app.domain.documents import (
 )
 from app.providers.storage import DocumentStorage, new_storage_key
 from app.repositories import documents as document_repository
+from app.repositories import jobs as job_repository
 from app.repositories import questions as question_repository
 from app.services.workspaces import require_workspace
 
@@ -88,6 +89,8 @@ def store_upload(
             status=DocumentStatus.QUEUED.value,
         )
         document_repository.add(session, document)
+        session.flush()
+        job_repository.enqueue(session, document.id)
         session.commit()
     except BaseException:
         session.rollback()
@@ -125,6 +128,7 @@ def retry_document(session: Session, user: User, document_id: uuid.UUID) -> Docu
         document.status = DocumentStatus.QUEUED.value
         document.failure_code = None
         document.failure_message = None
+        job_repository.enqueue(session, document.id)
     # Saves the change, if any, and releases the row lock.
     session.commit()
     return document
@@ -133,6 +137,11 @@ def retry_document(session: Session, user: User, document_id: uuid.UUID) -> Docu
 def delete_document(
     session: Session, storage: DocumentStorage, user: User, document_id: uuid.UUID
 ) -> None:
+    document = document_repository.get_for_member(session, document_id, user.id)
+    if document is None:
+        raise _document_not_found()
+    # Lock jobs before the document, like the worker's fenced save, to avoid lock-order deadlocks.
+    job_repository.cancel_for_document(session, document.id)
     document = document_repository.get_for_member(session, document_id, user.id, lock=True)
     if document is None:
         raise _document_not_found()

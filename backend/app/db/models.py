@@ -4,6 +4,7 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    JSON,
     BigInteger,
     CheckConstraint,
     Computed,
@@ -101,6 +102,42 @@ class Document(Base):
     status: Mapped[str] = mapped_column(String(20))
     failure_code: Mapped[str | None] = mapped_column(String(50))
     failure_message: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint("kind = 'index_document'", "kind"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')", "status"
+        ),
+        CheckConstraint(
+            "attempts >= 0 AND max_attempts > 0 AND attempts <= max_attempts", "attempts"
+        ),
+        Index("ix_jobs_due", "status", "run_after", "created_at"),
+        Index(
+            "uq_jobs_dedupe_unfinished",
+            "dedupe_key",
+            unique=True,
+            postgresql_where="status IN ('queued', 'running')",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    kind: Mapped[str] = mapped_column(String(50), default="index_document")
+    payload: Mapped[dict[str, str]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(20), default="queued")
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    attempts: Mapped[int] = mapped_column(default=0, server_default="0")
+    max_attempts: Mapped[int] = mapped_column(default=5, server_default="5")
+    locked_by: Mapped[str | None] = mapped_column(String(100))
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dedupe_key: Mapped[str] = mapped_column(String(100))
+    last_error_code: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

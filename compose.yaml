@@ -62,6 +62,7 @@ services:
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-10485760}
       MAX_DOCUMENTS_PER_WORKSPACE: ${MAX_DOCUMENTS_PER_WORKSPACE:-100}
       UPLOAD_TIMEOUT_SECONDS: ${UPLOAD_TIMEOUT_SECONDS:-120}
+      INDEXING_RUNNER: ${INDEXING_RUNNER:-embedded}
       INGESTION_WORKER_ENABLED: ${INGESTION_WORKER_ENABLED:-true}
       CHUNK_SIZE_CHARACTERS: ${CHUNK_SIZE_CHARACTERS:-1000}
       CHUNK_OVERLAP_CHARACTERS: ${CHUNK_OVERLAP_CHARACTERS:-150}
@@ -111,6 +112,35 @@ services:
         "8000",
         "--reload",
       ]
+
+  worker:
+    profiles: ["worker"]
+    build:
+      context: ./backend
+      target: development
+    environment:
+      DATABASE_URL: *database-url
+      INDEXING_RUNNER: worker
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
+      CHUNK_SIZE_CHARACTERS: ${CHUNK_SIZE_CHARACTERS:-1000}
+      CHUNK_OVERLAP_CHARACTERS: ${CHUNK_OVERLAP_CHARACTERS:-150}
+      MAX_DOCUMENT_PAGES: ${MAX_DOCUMENT_PAGES:-500}
+      MAX_DOCUMENT_CHARACTERS: ${MAX_DOCUMENT_CHARACTERS:-2000000}
+      PARSE_TIMEOUT_SECONDS: ${PARSE_TIMEOUT_SECONDS:-120}
+      QUESTION_CLEANUP_ENABLED: ${QUESTION_CLEANUP_ENABLED:-true}
+      RETRIEVAL_MODE: ${RETRIEVAL_MODE:-vector}
+      RETRIEVAL_CANDIDATES: ${RETRIEVAL_CANDIDATES:-20}
+      RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-4}
+    volumes:
+      - ./backend/app:/app/app
+      - document_storage:/app/storage
+      - embedding_models:/app/models
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command: ["python", "-m", "app.worker"]
 
   frontend:
     build:

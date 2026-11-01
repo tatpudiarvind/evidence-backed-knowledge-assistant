@@ -6,7 +6,7 @@ serves them at `/metrics` only when METRICS_ENABLED is true. Labels hold methods
 templates, status codes, and outcomes: never IDs, names, or text.
 """
 
-from prometheus_client import CollectorRegistry, Counter, Histogram
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 from prometheus_client.exposition import (
     CONTENT_TYPE_PLAIN_0_0_4,
     choose_encoder,
@@ -50,6 +50,17 @@ class Metrics:
             ("outcome",),
             registry=self.registry,
         )
+        self._job_count = Gauge(
+            "knowledge_assistant_jobs",
+            "Durable indexing jobs, by status.",
+            ("status",),
+            registry=self.registry,
+        )
+        self._oldest_queued_age = Gauge(
+            "knowledge_assistant_oldest_queued_job_age_seconds",
+            "Age of the oldest queued indexing job.",
+            registry=self.registry,
+        )
         self._reranker_failures = Counter(
             "knowledge_assistant_reranker_failures",
             "Questions whose candidates kept their fused order because the reranker failed.",
@@ -67,6 +78,11 @@ class Metrics:
 
     def count_indexing(self, outcome: str) -> None:
         self._documents.labels(outcome).inc()
+
+    def set_job_metrics(self, counts: dict[str, int], oldest_age_seconds: float) -> None:
+        for status in ("queued", "running", "succeeded", "failed", "cancelled"):
+            self._job_count.labels(status).set(counts.get(status, 0))
+        self._oldest_queued_age.set(oldest_age_seconds)
 
     def count_reranker_failure(self) -> None:
         self._reranker_failures.inc()

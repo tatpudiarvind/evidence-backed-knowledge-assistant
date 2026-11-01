@@ -1,6 +1,6 @@
 # Operations
 
-How to run the production-style stack on one computer: start it, check it, read its logs, back it up, upgrade it, and remove it, and how to run the end-to-end tests against it. This page describes the project as of Phase 7 (2026-11-01). The development stack, and running the app without containers, are in the [quickstart](../specification/README.md#local-quickstart). The [architecture guide](../architecture/README.md) explains what each part does, and the [security guide](../security/README.md) explains why the stack is built the way it is.
+How to run the production-style stack on one computer: start it, check it, read its logs, back it up, upgrade it, and remove it, and how to run the end-to-end tests against it. This page describes the project as of Phase 8 (2026-11-01). The development stack, and running the app without containers, are in the [quickstart](../specification/README.md#local-quickstart). The [architecture guide](../architecture/README.md) explains what each part does, and the [security guide](../security/README.md) explains why the stack is built the way it is.
 
 CI builds this stack on every push, starts it, downloads the embedding model into it, and runs the end-to-end tests against it ([what CI checks](#what-ci-checks)). It hasn't been run outside CI yet. Steps that CI doesn't cover are marked **Not tried yet**: try them on a spare copy before you rely on them.
 
@@ -14,11 +14,12 @@ Commands are for PowerShell, as in the quickstart, and run from the project root
 | Web app | Vite's dev server at `http://localhost:5173`, updating as the code changes | The built app, served by nginx at `http://localhost:8080` (`PROD_WEB_PORT`) |
 | API | Published at `http://localhost:8000`, with its interactive documentation at `/docs`. Restarts when its code changes | Not published: nginx passes `/api/` and `/health/` to it. Its image has no test tools, and runs as a user without root rights |
 | PostgreSQL | Published at `127.0.0.1:5432` | Not published |
-| Migrations | Run by the `migrate` service before the API starts | The same |
+| Migrations | Run by the `migrate` service before the API and worker start | The same |
+| Indexing | Embedded API thread by default; optional `worker` profile | Embedded API thread by default; optional `worker` profile shares storage and model volumes |
 | Logs | Text by default, with no limit on how much Docker keeps | One JSON object per line; Docker keeps up to three files of 10 MB per container |
 | Containers' own files | Writable, with the backend's code mounted from `backend/app` | Read-only apart from the volumes and `/tmp`, with every Linux capability dropped, in the migration, API, and web containers. The database's container is set up as in development |
 
-Both read their settings from the same `.env` file, and both publish their ports on `127.0.0.1` only, so other computers can't reach them. Their data lives in separate volumes, so they can run at the same time without sharing anything; each API then loads its own copy of the embedding model, and of the reranker in `hybrid_rerank` mode.
+Both read their settings from the same `.env` file, and both publish their ports on `127.0.0.1` only, so other computers can't reach them. `INDEXING_RUNNER=embedded` is the default and preserves the one-process mode. To opt into the worker, set it to `worker` and start with `--profile worker`; the worker shares storage and model volumes and loads its own embedding model copy. CI explicitly enables the profile.
 
 ## Running the production-style stack
 
@@ -33,11 +34,11 @@ You need Docker with Compose v2, the `docker compose` command: Docker Desktop on
 3. Build and start the stack, then download the embedding model (about 135 MB) into the stack's own volume. The development stack's copy is in a volume of its own, so this stack needs its own download.
 
    ```powershell
-   docker compose -f compose.prod.yaml up --build --detach --wait
+   docker compose -f compose.prod.yaml --profile worker up --build --detach --wait
    docker compose -f compose.prod.yaml run --rm backend python -m app.cli download-embedding-model
    ```
 
-   `up` starts the database, runs the migrations once it's healthy, starts the API once they have succeeded, and starts nginx once the API is healthy. `--wait` returns when all of them are up and healthy, and fails if one of them doesn't get there.
+   `up` starts the database, runs the migrations once it's healthy, starts the API (and the worker if its profile is enabled) once they have succeeded, and starts nginx once the API is healthy. `--wait` returns when all of them are up and healthy, and fails if one of them doesn't get there.
 4. Open `http://localhost:8080`. Below the sign-in form, the page should say "API and database are ready". Create your account, then turn registration off ([changing settings](#changing-settings)) unless other people need to sign up.
 
 Documents uploaded before the model was downloaded fail with "The embedding model isn't available on the server"; select **Retry** on them once it's there.
@@ -58,7 +59,7 @@ Then ask something the documents answer, such as "How long is a front desk shift
 
 ### Changing settings
 
-The stack takes its settings from `.env`, through the list in `compose.prod.yaml`. A few are set by that file instead:
+The stack takes its settings from `.env`, through the list in `compose.prod.yaml`. `INDEXING_RUNNER` defaults to `embedded` both in Compose and outside it. To use the optional worker service, set it to `worker` in `.env` and add `--profile worker` to the Compose commands. A few settings are set by the Compose file instead:
 
 - `APP_ENV=production` and `LOG_FORMAT=json`.
 - `CORS_ORIGINS=[]`: the browser reaches the API through nginx, on the app's own origin, so no other origin needs access.
@@ -110,10 +111,11 @@ The reranker is `cross-encoder/ms-marco-MiniLM-L6-v2`, at a pinned revision. The
 |---|---|---|---|
 | `db` | `pgvector/pgvector:0.8.0-pg16`: PostgreSQL 16 with pgvector | Holds everything apart from the uploaded files | The other containers in the stack |
 | `migrate` | The API's production image | Runs `alembic upgrade head`, then exits | Nothing; it only connects to `db` |
-| `backend` | The API's production image (`backend/Dockerfile`): Python 3.12, run as the user `app` (uid 10001) | The API, the indexing thread, and the cleanup thread that deletes questions after 3 days | The other containers in the stack; only `web` uses it |
+| `backend` | The API's production image (`backend/Dockerfile`): Python 3.12, run as the user `app` (uid 10001) | The API and reranker; the indexing thread when `INDEXING_RUNNER=embedded` | The other containers in the stack; only `web` uses it |
+| `worker` | The API's production image, same unprivileged user | Durable indexing jobs, parser child processes, and hourly question cleanup; loads its own embedding model | `db` and its shared storage/model volumes |
 | `web` | The built web app on nginx's unprivileged image, `nginxinc/nginx-unprivileged:1.30-alpine` (`frontend/Dockerfile`) | Serves the app, and passes `/api/` and `/health/` to the API | This computer, at `127.0.0.1:8080` |
 
-`db` starts first. `migrate` runs once `db` is healthy; `backend` starts once `migrate` has succeeded; `web` starts once `backend` is healthy. The health checks are `pg_isready` for `db`, every 5 seconds; `GET /health/live` for `backend`, every 10 seconds after a 30-second start period; and `GET /nginx-health` for `web`, every 10 seconds.
+`db` starts first. `migrate` runs once `db` is healthy; `backend` and `worker` start once `migrate` has succeeded; `web` starts once `backend` is healthy. The health checks are `pg_isready` for `db`, every 5 seconds; `GET /health/live` for `backend`, every 10 seconds after a 30-second start period; and `GET /nginx-health` for `web`, every 10 seconds.
 
 No service has a restart policy. A container that stops stays stopped, and after the computer restarts, the stack stays down until you run `up` again.
 
@@ -127,7 +129,7 @@ The data lives in three volumes, whose full names start with `evidence-backed-kn
 
 ### One API process
 
-The API runs as one Uvicorn process, on purpose. Its rate limits are counted in the process's memory, so several processes would each keep their own counts, and each would also start its own indexing and cleanup threads and load its own copies of the models. One process still handles several requests at once. Running more than one needs the changes in [what a real deployment adds](#what-a-real-deployment-adds).
+The API runs as one Uvicorn process, on purpose. Its rate limits are counted in the process's memory, so several API processes would each keep their own counts. `INDEXING_RUNNER=embedded` (default outside Compose) runs indexing in the API thread; `worker` moves indexing and hourly cleanup into the separate worker service. The worker uses PostgreSQL leases and a heartbeat, and it loads its own copy of the embedding model. One Windows sample during indexing used 134.4 MiB working set (852.6 MiB private bytes) for the API and 762.7 MiB working set (2,312.4 MiB private bytes) for the worker; this is a single observation, not a benchmark. Keep the worker opt-in unless the available memory is sufficient. Running more than one API process still needs shared rate limits as described in [what a real deployment adds](#what-a-real-deployment-adds).
 
 ### nginx
 
@@ -158,7 +160,7 @@ In PowerShell, `Invoke-RestMethod http://localhost:8080/health/ready` (a 503 sho
 ## Logs
 
 ```powershell
-docker compose -f compose.prod.yaml logs --follow backend
+docker compose -f compose.prod.yaml logs --follow worker
 ```
 
 Use `web`, `db`, or `migrate` for the others, or no name for all of them. Docker puts the container's name in front of each line; `--no-log-prefix` leaves it out.
@@ -191,7 +193,7 @@ Docker keeps up to three files of 10 MB for each container, and deletes the olde
 
 ## Metrics
 
-Metrics are off by default (`METRICS_ENABLED=false`). Turned on, the API serves request, answer, indexing, and reranker failure counts at `/metrics`, in Prometheus's format ([API](../api/README.md#health-and-metrics)). nginx doesn't pass `/metrics` on, and the API isn't published, so only containers on the stack's network can read them, such as a Prometheus added to the stack. The counts live in the API's memory and start again from zero when it restarts.
+Metrics are off by default (`METRICS_ENABLED=false`). Turned on, the API serves request, answer, indexing, and reranker failure counts, job counts by status, and the oldest queued job's age at `/metrics`, in Prometheus's format ([API](../api/README.md#health-and-metrics)). nginx doesn't pass `/metrics` on, and the API isn't published, so only containers on the stack's network can read them, such as a Prometheus added to the stack. The counts live in the API's memory and start again from zero when it restarts.
 
 **Not tried yet.** To read them once, from inside the API's container:
 
@@ -381,6 +383,7 @@ Both jobs show every service's status and logs at the end, and remove their stac
 | Answers are passages, under "… didn't reply" | Ollama can't be reached, or took longer than `LLM_TIMEOUT_SECONDS` | Check that Ollama is running and that `COMPOSE_OLLAMA_BASE_URL` reaches it, or allow more time |
 | `502 api_unreachable` | The API isn't running, or nginx hasn't found a recreated API yet | `ps --all` and the API's logs. nginx finds a recreated API within about 10 seconds |
 | `504 api_timeout` | The API took more than 180 seconds, for example with `LLM_TIMEOUT_SECONDS` raised above that | Lower `LLM_TIMEOUT_SECONDS`, or raise nginx's `proxy_read_timeout` and rebuild |
+| Jobs stay queued and the `worker` service is stopped | The queue is durable; the API does not index in `worker` mode | `docker compose -f compose.prod.yaml ps --all`, then inspect the worker logs; restart it after fixing the reported error |
 | `413 request_too_large` for a file under `MAX_UPLOAD_BYTES` | `MAX_UPLOAD_BYTES` is above nginx's 12 MiB limit | Lower it, or raise `client_max_body_size` in `frontend/nginx.conf` and rebuild |
 | `429 rate_limited` at sign-up, after many end-to-end runs | Registration allows 10 an hour from one address | `docker compose -f compose.prod.yaml restart backend` resets the counts |
 
