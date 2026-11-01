@@ -62,9 +62,12 @@ def write_lines(path: Path, *lines: str, newline: str = "\n") -> Path:
     return path
 
 
-def test_the_reviewed_questions_match_the_corpus() -> None:
-    documents = load_corpus(EVALUATION_DIR / "corpus")
-    questions = load_questions(EVALUATION_DIR / "questions.jsonl")
+@pytest.mark.parametrize(
+    "directory", [EVALUATION_DIR, EVALUATION_DIR / "held-out"], ids=["reviewed", "held-out"]
+)
+def test_the_reviewed_questions_match_the_corpus(directory: Path) -> None:
+    documents = load_corpus(directory / "corpus")
+    questions = load_questions(directory / "questions.jsonl")
 
     assert check_consistency(read_blocks(documents, make_settings()), questions) == []
     # Every kind of question, every file type, and every document is covered.
@@ -75,6 +78,14 @@ def test_the_reviewed_questions_match_the_corpus() -> None:
     }
     # An ID starts with its category's first letter: a01 is answerable, u01 unanswerable.
     assert all(question.id[0] == question.category.value[0] for question in questions)
+
+
+def test_the_held_out_questions_have_their_own_ids() -> None:
+    """The held-out set (P7-02) continues the numbering, so an ID names one question."""
+    reviewed = load_questions(EVALUATION_DIR / "questions.jsonl")
+    held_out = load_questions(EVALUATION_DIR / "held-out" / "questions.jsonl")
+
+    assert not {question.id for question in reviewed} & {question.id for question in held_out}
 
 
 @pytest.mark.parametrize(
