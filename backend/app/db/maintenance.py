@@ -22,6 +22,8 @@ APP_TABLES = (
     "workspace_memberships",
     "workspaces",
     "user_sessions",
+    "user_identities",
+    "oidc_login_states",
     "users",
 )
 _DATABASE_NAME = re.compile(r"[A-Za-z0-9_]+")

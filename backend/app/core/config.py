@@ -140,6 +140,20 @@ class Settings(BaseSettings):
     # A background thread in the API process deletes questions three days after they're asked.
     question_cleanup_enabled: bool = True
 
+    # Sign-in (Phase 10). "local" is the accounts above. "oidc" signs in through one OpenID
+    # Connect provider and turns password sign-in and registration off; "both" allows either.
+    # The API is the provider's client, so the client secret never reaches the browser (D-85).
+    auth_mode: Literal["local", "oidc", "both"] = "local"
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_client_secret: SecretStr | None = None
+    # The callback's full address, as registered at the provider. It must be on the address
+    # people use for the web app, so the session cookie is set for the right site.
+    oidc_redirect_uri: str | None = None
+    oidc_scopes: str = "openid email profile"
+    oidc_provider_name: str | None = Field(default=None, max_length=40)
+    oidc_timeout_seconds: int = Field(default=10, ge=1, le=60)
+
     model_config = SettingsConfigDict(
         env_file=REPOSITORY_ROOT / ".env",
         env_file_encoding="utf-8",
@@ -167,10 +181,59 @@ class Settings(BaseSettings):
             raise ValueError("OLLAMA_BASE_URL must be an http:// or https:// URL")
         return url.rstrip("/")
 
-    @field_validator("llm_base_url", "llm_model", mode="before")
+    @field_validator(
+        "llm_base_url",
+        "llm_model",
+        "oidc_issuer",
+        "oidc_client_id",
+        "oidc_client_secret",
+        "oidc_redirect_uri",
+        "oidc_provider_name",
+        mode="before",
+    )
     @classmethod
     def _blank_is_unset(cls, value: object) -> object:
         return None if isinstance(value, str) and not value.strip() else value
+
+    @model_validator(mode="after")
+    def _check_oidc(self) -> Self:
+        if self.auth_mode == "local":
+            return self
+        secret = self.oidc_client_secret.get_secret_value() if self.oidc_client_secret else ""
+        if not (
+            self.oidc_issuer
+            and self.oidc_client_id
+            and secret
+            and self.oidc_redirect_uri
+            and self.oidc_provider_name
+        ):
+            raise ValueError(
+                "AUTH_MODE other than local needs OIDC_ISSUER, OIDC_CLIENT_ID, "
+                "OIDC_CLIENT_SECRET, OIDC_REDIRECT_URI, and OIDC_PROVIDER_NAME"
+            )
+        for name, url in (
+            ("OIDC_ISSUER", self.oidc_issuer),
+            ("OIDC_REDIRECT_URI", self.oidc_redirect_uri),
+        ):
+            parts = urlsplit(url)
+            if parts.scheme not in ("http", "https") or not parts.hostname or parts.username:
+                raise ValueError(f"{name} must be an http:// or https:// URL without a login")
+            if parts.fragment:
+                raise ValueError(f"{name} can't have a fragment")
+            # Codes and tokens must not cross the network unencrypted.
+            if parts.scheme != "https" and not is_loopback_host(parts.hostname):
+                raise ValueError(f"{name} must use https:// unless it's on this computer")
+        if "openid" not in self.oidc_scopes.split():
+            self.oidc_scopes = f"openid {self.oidc_scopes}".strip()
+        return self
+
+    @property
+    def password_sign_in_enabled(self) -> bool:
+        return self.auth_mode in ("local", "both")
+
+    @property
+    def oidc_enabled(self) -> bool:
+        return self.auth_mode in ("oidc", "both")
 
     @model_validator(mode="after")
     def _check_openai_compatible(self) -> Self:

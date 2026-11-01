@@ -1,6 +1,6 @@
 # Architecture
 
-How the Evidence-backed Knowledge Assistant is built, as of Phase 8 (2026-11-01). The [specification](../specification/README.md#4-architecture-and-technology-decisions) records the design and the reasons for it. This page describes the code as it is, so a reviewer can find their way around it. Companion guides: [API](../api/README.md), [security](../security/README.md), and [operations](../operations/README.md).
+How the Evidence-backed Knowledge Assistant is built, as of Phase 10 (2026-11-02). The [specification](../specification/README.md#4-architecture-and-technology-decisions) records the design and the reasons for it. This page describes the code as it is, so a reviewer can find their way around it. Companion guides: [API](../api/README.md), [security](../security/README.md), and [operations](../operations/README.md).
 
 ## At a glance
 
@@ -91,7 +91,7 @@ flowchart TD
 | `services/` | The use cases: registering and signing in, workspaces, storing, retrying and deleting documents, indexing a document, finding a question's passages in the search mode set, and answering a question. Every service that touches workspace data checks membership itself. |
 | `repositories/` | The SQLAlchemy queries, one module per group of tables. Every query that returns workspace data joins the memberships on the signed-in user. |
 | `domain/` | Logic without I/O: file type and content checks, text normalization and chunking, the keyword query and reciprocal rank fusion, prompt building and the citation check, and the status and reason enumerations. It imports nothing else from the app, so its tests need no database or model. |
-| `providers/` | Adapters behind small interfaces: parsers (pypdf, python-docx, UTF-8 text), embeddings (Sentence Transformers), the reranker (a Sentence Transformers cross-encoder), the language model (Ollama's chat API over HTTP), and file storage (a local folder). |
+| `providers/` | Adapters behind small interfaces: parsers (pypdf, python-docx, UTF-8 text), embeddings (Sentence Transformers), the reranker (a Sentence Transformers cross-encoder), the language model (Ollama's chat API, or an OpenAI-compatible one, over HTTP), the OpenID Connect provider client (`oidc.py`, which checks ID tokens with PyJWT), and file storage (a local folder). |
 | `workers/` | The indexing loop and question cleanup thread; `worker.py` starts them in the standalone process. |
 | `db/` | The SQLAlchemy table models, and helpers that create and empty the throwaway databases of the tests and the evaluation. |
 | `core/` | Settings (pydantic-settings), the database engine, errors, logging, metrics, middleware, rate limits, and password hashing and session tokens. |
@@ -190,6 +190,7 @@ The prompt, the markers, and the check are described in the [security guide](../
 ```mermaid
 erDiagram
     users ||--o{ user_sessions : "signs in with"
+    users ||--o{ user_identities : "may sign in through"
     users ||--o{ workspace_memberships : "is a member through"
     workspaces ||--o{ workspace_memberships : "has"
     users ||--o{ workspaces : "owns"
@@ -218,7 +219,21 @@ erDiagram
     users {
         uuid id PK
         string email UK "trimmed, lower-cased"
-        string password_hash "Argon2id"
+        string password_hash "Argon2id; empty for provider accounts"
+    }
+    user_identities {
+        uuid id PK
+        uuid user_id FK
+        string issuer UK "with subject"
+        string subject UK "with issuer"
+    }
+    oidc_login_states {
+        string token_hash PK "SHA-256 of the login cookie's token"
+        string state
+        string nonce
+        string code_verifier
+        string return_to
+        timestamptz expires_at
     }
     user_sessions {
         uuid id PK

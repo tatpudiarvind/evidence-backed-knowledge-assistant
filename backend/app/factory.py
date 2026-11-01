@@ -29,6 +29,7 @@ from app.core.rate_limits import RateLimits
 from app.core.security import PasswordHashing
 from app.providers.embeddings import EmbeddingProvider, SentenceTransformerEmbeddings
 from app.providers.llm import LanguageModel, OllamaChatModel, OpenAICompatibleChatModel
+from app.providers.oidc import OidcProvider, OpenIdConnectProvider
 from app.providers.rerankers import CrossEncoderReranker, Reranker
 from app.providers.storage import LocalDocumentStorage
 from app.services.ingestion import DocumentIndexer
@@ -43,6 +44,7 @@ def create_app(
     embeddings: EmbeddingProvider | None = None,
     language_model: LanguageModel | None = None,
     reranker: Reranker | None = None,
+    oidc: OidcProvider | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     engine = create_database_engine(settings)
@@ -64,6 +66,10 @@ def create_app(
     if reranker is None and settings.retrieval_mode == "hybrid_rerank":
         reranker = CrossEncoderReranker(settings)
     cleanup = QuestionCleanupWorker(session_factory)
+    # Only the modes that sign in through a provider have one; it reads the provider's
+    # discovery document on first use, so creating the app needs no network.
+    if oidc is None and settings.oidc_enabled:
+        oidc = OpenIdConnectProvider(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -88,6 +94,7 @@ def create_app(
     app.state.embeddings = embeddings
     app.state.language_model = language_model
     app.state.reranker = reranker
+    app.state.oidc = oidc if settings.oidc_enabled else None
     app.state.ingestion_worker = worker
     app.state.question_cleanup = cleanup
     app.state.rate_limits = RateLimits(settings)

@@ -8,7 +8,9 @@ The assistant is a local demo of document retrieval and summarization. It isn't 
 
 | What | Where | Kept until |
 |---|---|---|
-| Accounts: email address and password hash | PostgreSQL: `users` | Local data is cleared; accounts can't be deleted yet |
+| Accounts: email address and password hash (none for an account made through an identity provider) | PostgreSQL: `users` | Local data is cleared; accounts can't be deleted yet |
+| Which provider account signs in to an account: the provider's issuer address and the person's subject ID there | PostgreSQL: `user_identities` | Local data is cleared, or the account's user is removed |
+| A sign-in in progress: a random state, nonce, and PKCE verifier, and where to return to | PostgreSQL: `oidc_login_states`, under the hash of a cookie token | 10 minutes, or until the sign-in finishes. One that is never finished is removed the next time anyone starts a sign-in |
 | Sign-in sessions: a hash of each session's token | PostgreSQL: `user_sessions` | Sign-out. An expired session stays until its user signs in again, but can't be used |
 | Workspaces: name and owner | PostgreSQL: `workspaces`, `workspace_memberships` | Local data is cleared; workspaces can't be deleted yet |
 | Uploaded files | The storage folder | The document is deleted |
@@ -28,6 +30,7 @@ The assistant is a local demo of document retrieval and summarization. It isn't 
 - Signing in creates a session. The browser gets a random token in the `eka_session` cookie, and the database keeps only the token's SHA-256 hash, with the times the session started and expires.
 - The cookie is `HttpOnly`, so page scripts can't read it, and `SameSite=Strict`. It is marked `Secure` only when `SESSION_COOKIE_SECURE=true`: set that whenever the app is served over HTTPS. Sessions last `SESSION_LIFETIME_HOURS`, 12 by default.
 - Signing out deletes the session. Signing in replaces the browser's previous session and deletes the user's expired ones.
+- With an identity provider, the app keeps only the provider's issuer address and the person's subject there (`user_identities`), and the email address that the provider reported as verified when the account was made. It doesn't keep the provider's tokens, the ID token, the person's name or picture, or a password. Later changes to the email at the provider aren't copied. Signing out ends this app's session only, not the one at the provider.
 - Registration is open by default. Set `REGISTRATION_ENABLED=false` once your accounts exist.
 
 ### Workspaces and documents

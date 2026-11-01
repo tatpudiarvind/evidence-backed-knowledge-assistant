@@ -185,3 +185,72 @@ def test_the_passages_must_fit_in_the_models_context_window() -> None:
     assert larger.answer_context_characters == 7000
     # Without a model, the passages are shown to no model, so any length is fine.
     assert make_settings(answer_context_characters=50_000).llm_provider == "none"
+
+
+OIDC = {
+    "oidc_issuer": "https://id.example.com/realms/eka",
+    "oidc_client_id": "eka",
+    "oidc_client_secret": "secret",
+    "oidc_redirect_uri": "https://app.example.com/api/v1/auth/oidc/callback",
+    "oidc_provider_name": "Example ID",
+}
+
+
+def test_local_mode_needs_no_provider_settings() -> None:
+    settings = make_settings()
+
+    assert settings.password_sign_in_enabled
+    assert not settings.oidc_enabled
+
+
+@pytest.mark.parametrize("missing", sorted(OIDC))
+def test_a_provider_mode_needs_every_provider_setting(missing: str) -> None:
+    values = {key: value for key, value in OIDC.items() if key != missing}
+
+    with pytest.raises(ValidationError, match="OIDC_ISSUER"):
+        make_settings(auth_mode="oidc", **values)
+
+
+def test_the_modes_say_which_sign_ins_are_on() -> None:
+    both = make_settings(auth_mode="both", **OIDC)
+    oidc = make_settings(auth_mode="oidc", **OIDC)
+
+    assert both.password_sign_in_enabled and both.oidc_enabled
+    assert not oidc.password_sign_in_enabled and oidc.oidc_enabled
+
+
+@pytest.mark.parametrize(
+    "name, value",
+    [
+        ("oidc_issuer", "http://id.example.com/realms/eka"),
+        ("oidc_redirect_uri", "http://app.example.com/callback"),
+        ("oidc_issuer", "https://user:pass@id.example.com"),
+        ("oidc_redirect_uri", "https://app.example.com/callback#frag"),
+        ("oidc_issuer", "ftp://id.example.com"),
+    ],
+)
+def test_provider_addresses_must_be_safe(name: str, value: str) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(auth_mode="oidc", **{**OIDC, name: value})
+
+
+def test_a_provider_on_this_computer_may_use_http() -> None:
+    settings = make_settings(
+        auth_mode="oidc",
+        **{**OIDC, "oidc_issuer": "http://localhost:8081/realms/eka"},
+    )
+
+    assert settings.oidc_enabled
+
+
+def test_the_openid_scope_is_always_asked_for() -> None:
+    settings = make_settings(auth_mode="oidc", oidc_scopes="email", **OIDC)
+
+    assert settings.oidc_scopes.split() == ["openid", "email"]
+
+
+def test_blank_provider_settings_count_as_unset() -> None:
+    settings = make_settings(oidc_issuer="", oidc_client_secret="")
+
+    assert settings.oidc_issuer is None
+    assert settings.oidc_client_secret is None

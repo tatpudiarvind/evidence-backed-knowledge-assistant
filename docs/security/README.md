@@ -1,6 +1,6 @@
 # Security
 
-How the Evidence-backed Knowledge Assistant protects accounts, workspaces, uploaded files, and answers, and what it doesn't protect against yet. This page describes the code as of Phase 8 (2026-11-01). The requirements it follows are in the [specification](../specification/README.md#12-security-privacy-and-operational-requirements). What is stored, logged, and sent, and for how long, is in [privacy and data handling](../privacy/README.md).
+How the Evidence-backed Knowledge Assistant protects accounts, workspaces, uploaded files, and answers, and what it doesn't protect against yet. This page describes the code as of Phase 10 (2026-11-02). The requirements it follows are in the [specification](../specification/README.md#12-security-privacy-and-operational-requirements). What is stored, logged, and sent, and for how long, is in [privacy and data handling](../privacy/README.md).
 
 The assistant is a portfolio demo of document retrieval, built to run on one computer. It isn't certified for regulated or clinical use, it hasn't been penetration-tested or reviewed by anyone independent, and its answers aren't professional, medical, legal, or financial advice. Upload only public, synthetic, or licensed documents you're allowed to use, and never real patient or confidential data.
 
@@ -9,6 +9,7 @@ The assistant is a portfolio demo of document retrieval, built to run on one com
 | Risk | Main controls | Checked by |
 |---|---|---|
 | Someone guesses a password | Argon2id hashes; 10 sign-in attempts a minute per network address; the same answer, after the same work, for an unknown email as for a wrong password | `test_security`, `test_auth_api`, `test_rate_limits` |
+| A forged or replayed provider sign-in | The API checks each ID token's signature, issuer, audience, expiry, and nonce; a one-use `state` and a PKCE verifier bound to the browser; only literal `email_verified: true` counts | `test_oidc_sign_in`, `test_config` |
 | Someone steals or forges a session | Random 256-bit tokens, stored only as SHA-256 hashes, in an `HttpOnly`, `SameSite=Strict` cookie | `test_security`, `test_auth_api` |
 | Another site sends requests as the user | The `SameSite=Strict` cookie; a custom header on every state-changing request; explicit CORS origins | `test_errors`, `test_config`, `test_documents_api`, `test_questions_api` |
 | A user reads another user's workspace | Membership checked inside each database query; `404` for other users' items, as for missing ones | `test_isolation_api`, `test_robustness` |
@@ -28,6 +29,46 @@ The tests are in `backend/tests`. The [known gaps](#known-gaps) are at the end.
 - An unknown email is checked against a throwaway hash, so it takes about as long as a wrong password, and both get the same `401 invalid_credentials`: "The email or password is incorrect."
 - Registration does say whether an email has an account (`409 email_already_registered`). It is limited to 10 attempts an hour per network address, and `REGISTRATION_ENABLED=false` turns it off once your accounts exist.
 - Sign-in attempts are limited to 10 a minute per network address (D-69).
+- `AUTH_MODE` chooses how people sign in: `local` (the default), `oidc`, or `both`. When passwords are off, registering and signing in with a password answer `403 password_sign_in_disabled`. An account made through a provider has no password, and a password sign-in to it gets the same `401 invalid_credentials` as a wrong password, after the same hashing work.
+
+## Signing in through an identity provider
+
+With `AUTH_MODE=oidc` or `both`, the API is the client of one OpenID Connect provider and runs the authorization code flow itself (D-85). The browser only follows redirects. The ID token and the provider's other tokens never reach it, and the API keeps neither: only the provider's issuer address and the person's subject are stored, in `user_identities`.
+
+- **Start.** `GET /api/v1/auth/oidc/login` makes a random `state`, a random `nonce`, and a PKCE verifier (RFC 7636, method `S256`), stores them in `oidc_login_states` under the SHA-256 hash of a random token, and sends the browser to the provider. The token goes in the `eka_oidc_login` cookie, which is `HttpOnly`, `SameSite=Lax`, limited to the path `/api/v1/auth/oidc`, and lasts 10 minutes. It is `Lax` because the provider sends the browser back with a cross-site navigation, which doesn't carry `Strict` cookies.
+- **Finish.** `GET /api/v1/auth/oidc/callback` deletes the stored state in the same statement that reads it, so a state works once, and refuses it when it has expired. The `state` in the address must equal the stored one, and the cookie must be the browser's own: a callback from another browser finds no state.
+- **Token exchange.** The code goes to the provider's token endpoint with the PKCE verifier and the client secret in an `Authorization` header (RFC 6749 §2.3.1). Redirects are never followed, so the secret can't be sent elsewhere. Replies are capped at 1 MiB, and every request has a timeout (`OIDC_TIMEOUT_SECONDS`).
+- **The ID token** is checked by PyJWT, a maintained library, as OpenID Connect Core §3.1.3.7 lists: the signature, against the provider's published keys, with only `RS256`, `PS256`, and `ES256` allowed, so `none` and shared-secret algorithms are refused; `iss` equal to the configured issuer; `aud` containing the client ID, and `azp` equal to it when present or needed; `exp`, `iat`, `sub`, and `iss` present, with 60 seconds of clock leeway; and the `nonce` equal to the stored one, compared in constant time.
+- **Keys and discovery.** The provider's discovery document must name the configured issuer exactly (OpenID Connect Discovery §4.3). Its endpoints must be `https://`, or `http://` only on this computer. Keys are cached, and a token with an unknown key ID makes the API fetch them again at most every 30 seconds, so made-up key IDs can't make it fetch on every request.
+- **Accounts.** A person is known by issuer and subject, never by email. A first sign-in creates an account only when the provider says the email is verified, as the literal `true`, and no other account has that email. Otherwise it is refused (`email_not_verified`, `email_in_use`). Accounts are never linked by email: that is how one person's account is taken over by another who can claim the same address at a weaker provider.
+- **After sign-in** the API starts the same session as for a password: the `eka_session` cookie, `HttpOnly` and `SameSite=Strict`, with only its hash stored.
+- **Where the browser lands.** The return path is checked when sign-in starts (it must begin with one `/`, and have no `//`, backslash, or control character, and be at most 512 characters), and kept on the server, so the callback never redirects to an address taken from the request. Failures send the browser to `/?sign_in_error=<code>`, with the code only, never a message from the provider.
+- **Errors and logs** name a short code. The provider's messages, tokens, codes, and the client secret aren't logged or shown.
+
+### Review against the standards (P10-06)
+
+This is the project's own review of the code against the parts of [RFC 9700](https://www.rfc-editor.org/rfc/rfc9700) (OAuth 2.0 security best current practice) and OpenID Connect Core that apply. It is not an independent one.
+
+| Requirement | How it's met | Checked by |
+|---|---|---|
+| Authorization code flow with PKCE `S256` (RFC 9700 §2.1.1) | Every sign-in sends a challenge and the token request sends the verifier | `test_oidc_sign_in` |
+| `state` ties the callback to the browser that started it (RFC 9700 §2.1) | A one-use state, kept under the hash of a cookie token | `test_oidc_sign_in` |
+| The ID token's `nonce` is checked (OIDC Core §3.1.3.7) | Compared with the stored nonce, in constant time | `test_oidc_sign_in` |
+| Signature, `iss`, `aud`, `azp`, `exp` are checked (OIDC Core §3.1.3.7) | PyJWT, with a fixed list of algorithms | `test_oidc_sign_in` |
+| The redirect URI is exact (RFC 9700 §2.1) | One configured address, sent unchanged; the provider must hold it as registered | `test_config` |
+| No open redirect after sign-in | The return path is checked, kept on the server, and always relative | `test_oidc_sign_in` |
+| Endpoints use TLS (RFC 9700 §4) | Settings and discovery refuse `http://` except on this computer | `test_config`, `test_oidc_sign_in` |
+| Tokens aren't exposed to the browser | The browser sees only redirects; no token is stored | `test_oidc_sign_in` |
+| A confused provider can't impersonate another | The discovery issuer must equal the configured one | `test_oidc_sign_in` |
+
+Gaps in this review, also under [known gaps](#known-gaps):
+
+- It was tested against a stand-in provider that the tests run on this computer, and by reading the code. It was not run against a real provider (Keycloak, or a hosted one) or in a real browser, so a provider-specific behavior could still surprise it.
+- Whether a browser sends the `Strict` session cookie on the first request after coming back from the provider is untested; the web app's own request to `/auth/me` is same-site, which should carry it.
+- Signing out ends only this app's session, not the one at the provider. The provider's session can sign the person straight back in.
+- There's no refresh token, back-channel logout, or ID token encryption, and the API doesn't ask for or use access tokens.
+- A signed-in user can't link a provider to an existing password account (see the known gaps).
+- The sign-in rate limit counts both the start and the callback, so one sign-in uses two of the 10 attempts a minute.
 
 ## Sessions and cookies
 
@@ -174,7 +215,9 @@ None of these matter much while the app runs on one computer for one person. Eac
 | No HTTPS, and the `Secure` cookie flag is off by default | On a network, sessions and documents would travel unencrypted | A TLS-terminating proxy and `SESSION_COOKIE_SECURE=true` |
 | Rate limits live in one process's memory | They reset on restart and can't be shared by several API processes. Sign-in attempts aren't limited per account, and nothing limits how many questions run at once across accounts (R-24) | A shared store such as Redis, or limits in the proxy |
 | Registration says whether an email has an account | It lets someone check which emails are registered, 10 times an hour per address | Turn registration off, or answer every registration the same way and send an email |
-| Local accounts only | No email verification, password reset, second factor, or single sign-on | An identity provider |
+| Local accounts have no email verification, password reset, or second factor | Anyone can register with an address they don't own, if registration is open | `AUTH_MODE=oidc`, which leaves those to the provider |
+| The sign-in through a provider hasn't met a real provider or browser | Tests use a stand-in provider on this computer. A real provider's quirks, and the browser's handling of the cookies, aren't shown | A run against Keycloak or a hosted provider, in a browser |
+| Provider accounts and password accounts can't be linked, and signing out doesn't sign out of the provider | Someone with a password account who moves to a provider gets a new account, or is refused when the email is taken | An explicit, signed-in linking step, and the provider's logout |
 | No account or workspace deletion | Removing a user means clearing all local data | Endpoints that delete them with their files |
 | No malware scanning or OCR | Uploaded files are stored as they are; scanned PDFs can't be indexed | A scanner before storage; OCR as an indexing step |
 | Parser resource exhaustion | A crafted file could use substantial CPU or memory. A child process and hard timeout limit the exposure, but Windows has no equivalent parser memory limit (R-19) | Linux applies a child address-space limit; keep the parser child isolated and retain the upload and parse limits |

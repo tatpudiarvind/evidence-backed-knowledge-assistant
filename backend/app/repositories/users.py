@@ -4,17 +4,31 @@ from datetime import datetime
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.db.models import User, UserSession
+from app.db.models import User, UserIdentity, UserSession
 
 
 def get_user_by_email(session: Session, email: str) -> User | None:
     return session.scalar(select(User).where(User.email == email))
 
 
-def add_user(session: Session, email: str, password_hash: str) -> User:
+def add_user(session: Session, email: str, password_hash: str | None) -> User:
     user = User(email=email, password_hash=password_hash)
     session.add(user)
     return user
+
+
+def get_user_by_identity(session: Session, issuer: str, subject: str) -> User | None:
+    return session.scalar(
+        select(User)
+        .join(UserIdentity, UserIdentity.user_id == User.id)
+        .where(UserIdentity.issuer == issuer, UserIdentity.subject == subject)
+    )
+
+
+def add_identity(session: Session, user_id: uuid.UUID, issuer: str, subject: str) -> UserIdentity:
+    identity = UserIdentity(user_id=user_id, issuer=issuer, subject=subject)
+    session.add(identity)
+    return identity
 
 
 def add_session(

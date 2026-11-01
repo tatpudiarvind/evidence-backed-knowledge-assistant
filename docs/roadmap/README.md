@@ -1,6 +1,6 @@
 # Roadmap: later features
 
-The plan for four features that the [specification](../specification/README.md#15-decisions-intentionally-deferred) left for later: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider. It was written on 2026-10-31, after Phases 0 to 6. [Phase 7](#phase-7--hybrid-search-and-reranking) has since been built, but isn't finished. Phase 8 is implemented, merged to `main`, and CI-verified on the branch and `main`; Phases 9 and 10 have not been built yet. The order, Phases 7 to 10, is the owner's choice (D-80). The tasks are in the [task tracker](../tracker/01-task-tracker.md), and the decisions and risks named here, such as PD-09 and R-27, are in [decisions, risks, and issues](../tracker/03-decisions-risks-issues.md).
+The plan for four features that the [specification](../specification/README.md#15-decisions-intentionally-deferred) left for later: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider. It was written on 2026-10-31, after Phases 0 to 6. [Phase 7](#phase-7--hybrid-search-and-reranking) has since been built, but isn't finished. Phases 8 and 9 are implemented, and Phase 10 is implemented and tested against a stand-in provider; each phase below says what was and wasn't verified. The order, Phases 7 to 10, is the owner's choice (D-80). The tasks are in the [task tracker](../tracker/01-task-tracker.md), and the decisions and risks named here, such as PD-09 and R-27, are in [decisions, risks, and issues](../tracker/03-decisions-risks-issues.md).
 
 > **This is a plan, not a result.** Each phase opens with a decision task that confirms or changes the design below. A feature that changes what users get, or adds a process or a cost, keeps today's behavior by default until a measurement, a test, or a review supports changing it. The plan promises no numbers: a result is reported only after it has been measured, with the conditions it was measured under.
 
@@ -329,6 +329,17 @@ Not in this phase: streamed answers, tools or function calling, hosted embedding
 
 Settles PD-10. Tasks: [Phase 10 in the task tracker](../tracker/01-task-tracker.md#phase-10--sign-in-through-an-openid-connect-provider).
 
+### What was built
+
+Implemented as designed below, with these decisions and differences (D-85):
+
+- **Library:** PyJWT 2.10.1 (MIT) with the `crypto` extra, which verifies ID tokens' signatures and claims. The API's own code makes the requests, caches the keys, and applies the OpenID Connect rules; none of it is cryptography.
+- **Email of a new account:** a first sign-in creates an account only when the provider's `email` claim is present, well formed, and `email_verified` is the literal `true`, and no other account has it. Otherwise sign-in is refused (`email_not_verified`, `email_in_use`).
+- **Signing out** ends only this app's session; no request goes to the provider.
+- **Not built:** letting a signed-in user link a provider to their own account. Nothing links accounts by email, and with no linking step, a person with a password account who first signs in through a provider is refused (`email_in_use`). The design's sentence on linking below stands as a possible later step.
+- **Not run:** the Keycloak end-to-end test in CI, and a trial in a real browser. The flow is tested against a stand-in provider inside the tests (a loopback server with its own keys), which cannot show a real provider's quirks or the browser's cookie handling.
+- **The web app** asks `GET /api/v1/auth/options` what to offer, and falls back to the password form if it can't.
+
 ### Why
 
 Today every account is local: an email address and a password hashed with Argon2id, with no email verification, password reset, or second factor ([known gaps](../security/README.md#known-gaps)). Signing in through an identity provider leaves those to a system built for them, and the app stores no password for those users. The [specification](../specification/README.md#non-goals-for-the-mvp) lists multi-tenant enterprise single sign-on as a non-goal, so this phase supports one provider, configured for one deployment, such as a Keycloak server.
@@ -345,7 +356,7 @@ Today every account is local: an email address and a password hashed with Argon2
 - **Accounts.**
   - A new `user_identities` table links a user to an issuer and a subject, unique together.
   - `users.password_hash` becomes optional, for users who sign in only through the provider. Password sign-in refuses an account without a password.
-  - Accounts are never linked by email. If the provider's email belongs to an existing account, sign-in is refused with a clear message, because neither side's email may be verified. A signed-in user can link a provider to their own account.
+  - Accounts are never linked by email. If the provider's email belongs to an existing account, sign-in is refused with a clear message, because neither side's email may be verified. A signed-in user linking a provider to their own account is a possible later step, and wasn't built.
   - How an account created through the provider gets its email, given that `users.email` is unique, is decided at P10-02.
   - Switching an existing install to `oidc` mode locks out local accounts without a linked provider; the operations guide will say so.
 - **Library.** A maintained library checks the tokens: Authlib (BSD-3-Clause), or PyJWT (MIT) with its key-set client, or joserfc (BSD-3-Clause). P10-01 chooses. No cryptography is written by hand.
@@ -391,7 +402,7 @@ sequenceDiagram
 - A fake provider inside the tests, with its own keys and discovery document, and tokens that must be refused: a bad signature, `alg` set to `none`, the wrong issuer or audience, an expired token, the wrong nonce, a reused or unknown state, and an unknown key.
 - Return paths that try to send the browser elsewhere.
 - The account rules: the same subject signs in to the same account, an email that's already used is refused, and password sign-in to an account without a password is refused.
-- End to end in CI: Keycloak (Apache-2.0) in a container, with a synthetic realm and user, and a browser test through the whole flow. It also shows whether the browser sends the `Strict` session cookie after coming back from the provider, which hasn't been tried yet.
+- End to end in CI: Keycloak (Apache-2.0) in a container, with a synthetic realm and user, and a browser test through the whole flow. It would also show whether the browser sends the `Strict` session cookie after coming back from the provider. **Not done:** neither this nor the other check has been tried.
 - On this computer, Keycloak can run from its zip with `bin\kc.bat start-dev`, which needs Java ([getting started](https://www.keycloak.org/getting-started/getting-started-zip)). This hasn't been tried yet either.
 - A security review (P10-06) against RFC 9700 and OpenID Connect Core, recorded in the security guide.
 

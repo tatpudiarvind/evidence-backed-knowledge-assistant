@@ -28,6 +28,8 @@ class SignedIn:
 def register(
     session: Session, passwords: PasswordHashing, settings: Settings, email: str, password: str
 ) -> SignedIn:
+    if not settings.password_sign_in_enabled:
+        raise _password_sign_in_disabled()
     if not settings.registration_enabled:
         raise AppError(403, "registration_disabled", "Registration is turned off on this server.")
     if user_repository.get_user_by_email(session, email) is not None:
@@ -39,7 +41,7 @@ def register(
         # Another request registered the same email in the meantime.
         session.rollback()
         raise _email_taken() from None
-    signed_in = _start_session(session, settings, user)
+    signed_in = start_session(session, settings, user)
     session.commit()
     return signed_in
 
@@ -52,8 +54,15 @@ def login(
     password: str,
     previous_token: str | None,
 ) -> SignedIn:
+    if not settings.password_sign_in_enabled:
+        raise _password_sign_in_disabled()
     user = user_repository.get_user_by_email(session, email)
     if user is None:
+        passwords.spend_verification_time(password)
+        raise _invalid_credentials()
+    if user.password_hash is None:
+        # A provider-only account has no password to check. The answer and the time spent are
+        # the same as for a wrong password, so this doesn't reveal which emails have accounts.
         passwords.spend_verification_time(password)
         raise _invalid_credentials()
     if not passwords.verify(user.password_hash, password):
@@ -64,7 +73,7 @@ def login(
         # Signing in replaces whatever session this browser had before.
         user_repository.delete_session(session, token_hash)
     user_repository.delete_expired_sessions(session, user.id, datetime.now(UTC))
-    signed_in = _start_session(session, settings, user)
+    signed_in = start_session(session, settings, user)
     session.commit()
     return signed_in
 
@@ -82,7 +91,7 @@ def user_for_session_token(session: Session, token: str | None) -> User | None:
     return user_repository.get_user_by_session(session, token_hash, datetime.now(UTC))
 
 
-def _start_session(session: Session, settings: Settings, user: User) -> SignedIn:
+def start_session(session: Session, settings: Settings, user: User) -> SignedIn:
     token = new_session_token()
     lifetime = timedelta(hours=settings.session_lifetime_hours)
     user_repository.add_session(
@@ -95,6 +104,14 @@ def _hash_if_plausible(token: str | None) -> str | None:
     if not token or len(token) > MAX_SESSION_TOKEN_LENGTH:
         return None
     return hash_session_token(token)
+
+
+def _password_sign_in_disabled() -> AppError:
+    return AppError(
+        403,
+        "password_sign_in_disabled",
+        "This server signs in through an identity provider, not with a password.",
+    )
 
 
 def _email_taken() -> AppError:

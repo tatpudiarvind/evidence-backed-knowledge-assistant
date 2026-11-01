@@ -48,6 +48,15 @@ class UserOut(BaseModel):
     email: str
 
 
+class AuthOptionsOut(BaseModel):
+    """How this server lets people sign in, so the web app can show the right choices."""
+
+    password: bool
+    registration: bool
+    # The name of the identity provider, or None when there isn't one.
+    provider_name: str | None
+
+
 class WorkspaceCreateRequest(BaseModel):
     name: str = Field(max_length=1000)
 

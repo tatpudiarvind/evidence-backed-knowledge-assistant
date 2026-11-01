@@ -280,6 +280,17 @@ h1 {
   font-size: 13px;
 }
 
+.auth-divider {
+  margin: 16px 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+a.button {
+  text-decoration: none;
+}
+
 .service-status {
   display: grid;
   gap: 8px;

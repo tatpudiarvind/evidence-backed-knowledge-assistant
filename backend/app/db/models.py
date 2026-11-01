@@ -37,8 +37,37 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     # Stored trimmed and lower-cased, so each address can register only once.
     email: Mapped[str] = mapped_column(String(320), unique=True)
-    password_hash: Mapped[str] = mapped_column(String(255))
+    password_hash: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserIdentity(Base):
+    """A user's account at an OpenID Connect provider: the provider's issuer and its subject."""
+
+    __tablename__ = "user_identities"
+    __table_args__ = (UniqueConstraint("issuer", "subject"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    issuer: Mapped[str] = mapped_column(String(512))
+    subject: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OidcLoginState(Base):
+    """A provider sign-in that has started and not yet finished or expired."""
+
+    __tablename__ = "oidc_login_states"
+
+    # SHA-256 of the token in the browser's login cookie.
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    state: Mapped[str] = mapped_column(String(64))
+    nonce: Mapped[str] = mapped_column(String(64))
+    code_verifier: Mapped[str] = mapped_column(String(128))
+    return_to: Mapped[str] = mapped_column(String(512))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class UserSession(Base):

@@ -217,6 +217,28 @@ By default the stack runs without one: `COMPOSE_LLM_PROVIDER` isn't set, so `LLM
 
 If the model can't be reached, or doesn't answer within `LLM_TIMEOUT_SECONDS` (120 by default), the answer falls back to the closest passages, under "qwen3:4b-instruct-2507-q4_K_M didn't reply". Without a GPU that suits it, the model can be much slower. To give it more time, raise `LLM_TIMEOUT_SECONDS`, and nginx's `proxy_read_timeout` too if the new value gets near 180 seconds.
 
+## Signing in through an identity provider
+
+By default, accounts are local: an email and a password. To sign in through an [OpenID Connect](https://openid.net/specs/openid-connect-core-1_0.html) provider such as Keycloak instead, or as well, set these in `.env` (they're listed in `.env.example`, and passed to the API by both Compose files):
+
+| Setting | What to put |
+|---|---|
+| `AUTH_MODE` | `oidc` for the provider only, `both` for the provider and passwords, `local` for passwords only |
+| `OIDC_ISSUER` | The provider's issuer address, as in its discovery document. The API reads `<issuer>/.well-known/openid-configuration` and refuses it if it names another issuer |
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | The app's registration at the provider, as a confidential client that uses the authorization code flow. Never commit the secret |
+| `OIDC_REDIRECT_URI` | `<the web app's address>/api/v1/auth/oidc/callback`, registered at the provider exactly as written. It must be on the web app's own address, which reaches the API through the `/api` proxy (the Vite dev server, or nginx) |
+| `OIDC_PROVIDER_NAME` | The name on the "Sign in with" button |
+| `OIDC_SCOPES` | Optional; `openid email profile` by default. `openid` is always added |
+
+Then restart the API. The settings are checked when it starts, so a missing one stops it with a message naming the setting.
+
+- **HTTPS.** The provider's addresses and the app's must use `https://`; plain `http://` is accepted only on this computer. Set `SESSION_COOKIE_SECURE=true` when the app is served over HTTPS.
+- **Existing accounts.** `AUTH_MODE=oidc` closes password sign-in and registration, which locks out every password account. `both` keeps them, and a provider sign-in whose email already belongs to a password account is refused (`email_in_use`) rather than linked. There's no step yet that links the two; see the [known gaps](../security/README.md#known-gaps).
+- **Switching back.** Setting `AUTH_MODE=local` again opens password sign-in. An account made through a provider has no password and can't sign in this way.
+- **Signing out** ends this app's session only. The person may still be signed in at the provider, which can sign them straight back in.
+- **If it fails.** A browser that comes back with `?sign_in_error=` in the address was refused; the API's log names the reason without secrets (`Provider sign-in failed: …`). `provider_unavailable` means the API couldn't read the provider's discovery document or keys, so check that the API's container can reach the provider.
+- **Not tried yet.** This was tested against a stand-in provider on this computer, not against Keycloak or any hosted provider, and not through a browser. The first real sign-in may show a setting this page didn't anticipate.
+
 ## Backing up and restoring
 
 Back up the database (`postgres_data`) and the uploaded files (`document_storage`) together, while nothing changes them. The database lists each file by its storage name, so a database restored without its files lists documents that can't be downloaded or indexed again, and files restored without the database are orphans. The models needn't be backed up; download them again.
@@ -398,7 +420,7 @@ The production-style stack rehearses a deployment on one computer: plain HTTP to
 - **HTTPS**, from a proxy or load balancer that handles TLS, with `SESSION_COOKIE_SECURE=true` and HSTS. With that proxy in front of nginx, nginx must take the client's address from it (its `real_ip` module); otherwise every user shares one set of rate limits, and the logs show only the proxy.
 - **Limits at the edge** on connections and request rates, for every path. Here, nginx limits only body sizes and slow clients, and the API limits only sign-ins, registrations, and questions.
 - **Managed secrets**: the database password in the platform's secret store rather than a `.env` file, and nothing left at an example value.
-- **Accounts fit for others**: registration off once the accounts exist, or an identity provider with verified emails, password resets, and second factors (spec §15).
+- **Accounts fit for others**: registration off once the accounts exist, or [an identity provider](#signing-in-through-an-identity-provider) with verified emails, password resets, and second factors, after a trial against the provider you'd use (spec §15).
 - **Shared state before a second API process**: rate limits in a shared store such as Redis, and indexing through a durable queue, a choice spec §15 defers.
 - **A database run with care**: managed PostgreSQL with pgvector, or one run just as carefully, never reachable from the internet, and encrypted at rest.
 - **Backups**: automated, encrypted, kept somewhere else, and restored on a schedule to prove they work.

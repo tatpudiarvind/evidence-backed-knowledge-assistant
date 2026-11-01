@@ -560,10 +560,11 @@ Phases 7 to 10 take up four of the decisions deferred in section 15, and the [ro
 - **Done when:** the adapter passes its tests without a hosted account, answers record their provider, and a hosted evaluation has run only if the owner approved a vendor and its cost. The first two hold; no vendor has been chosen or called, so no hosted evaluation has run.
 - **Plan:** [Phase 9 in the roadmap](../roadmap/README.md#phase-9--a-hosted-language-model).
 
-### Phase 10 — Sign-in through an OpenID Connect provider (planned)
+### Phase 10 — Sign-in through an OpenID Connect provider (implemented; no real provider tried)
 - Let users sign in through one configured OpenID Connect provider, with the API as the client: the authorization code flow with PKCE, ID token checks by a maintained library, and the same session cookie afterwards.
 - Keep local accounts as the default, never link accounts by email, and keep authorization in the app's workspace memberships.
-- **Done when:** sign-in through Keycloak works end to end in CI, every refusal case is refused, password sign-in still works, and a security review has been recorded.
+- The API is the client and checks ID tokens with PyJWT; it keeps only the provider's issuer and the person's subject, a new account needs a verified email, and signing out ends only the app's session. Linking a provider to an existing account isn't built.
+- **Done when:** sign-in through Keycloak works end to end in CI, every refusal case is refused, password sign-in still works, and a security review has been recorded. The last three hold, against a stand-in provider that the tests run; the Keycloak run in CI hasn't been built or tried.
 - **Plan:** [Phase 10 in the roadmap](../roadmap/README.md#phase-10--sign-in-through-an-openid-connect-provider).
 
 ## 11. Quality strategy
@@ -619,7 +620,7 @@ Four of these have a plan, Phases 7 to 10 in the [roadmap](../roadmap/README.md)
 - Whether answers should be written outside the HTTP request (a queue, or streamed replies), if waiting for the model holds up the API.
 - Keyword/hybrid search, reranking, and additional vector index tuning, based on evaluation evidence. Hybrid search and reranking were built in [Phase 7](../roadmap/README.md#phase-7--hybrid-search-and-reranking) and are available as settings: `hybrid` tied with vector search on the held-out set, so vector search stays the default, and whether reranking helps waits until its model can be downloaded and measured ([the choice](../evaluation/README.md#the-choice)). Index tuning stays deferred.
 - Re-tuning the evidence threshold (0.5) and the number of passages per question (4), which Phase 5 chose using the same questions it scored them on, once a larger, independently reviewed question set exists. Phase 7's held-out set checked them without re-tuning them: Phase 5's rules would choose 6 passages and the same threshold on it, but changing a setting is a decision of its own ([the held-out set with the model](../evaluation/README.md#the-held-out-set-with-the-model)).
-- Full authentication provider, if the project is used beyond a portfolio demo. Planned as [Phase 10](../roadmap/README.md#phase-10--sign-in-through-an-openid-connect-provider): one OpenID Connect provider per deployment.
+- Full authentication provider, if the project is used beyond a portfolio demo. Implemented as [Phase 10](../roadmap/README.md#phase-10--sign-in-through-an-openid-connect-provider): one OpenID Connect provider per deployment.
 
 ## 16. Suggested first implementation milestone
 

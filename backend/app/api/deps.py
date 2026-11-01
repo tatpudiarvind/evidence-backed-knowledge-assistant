@@ -16,6 +16,7 @@ from app.core.security import PasswordHashing
 from app.db.models import User
 from app.providers.embeddings import EmbeddingProvider
 from app.providers.llm import LanguageModel
+from app.providers.oidc import OidcProvider
 from app.providers.rerankers import Reranker
 from app.providers.storage import DocumentStorage
 from app.services import auth as auth_service
@@ -76,6 +77,13 @@ async def get_metrics(request: Request) -> Metrics:
     return metrics
 
 
+async def get_oidc(request: Request) -> OidcProvider:
+    provider: OidcProvider | None = request.app.state.oidc
+    if provider is None:
+        raise AppError(404, "oidc_not_enabled", "Sign-in through a provider is turned off.")
+    return provider
+
+
 def get_db(request: Request) -> Iterator[Session]:
     session_factory: sessionmaker[Session] = request.app.state.session_factory
     with session_factory() as session:
@@ -90,6 +98,7 @@ EmbeddingsDep = Annotated[EmbeddingProvider, Depends(get_embeddings)]
 LanguageModelDep = Annotated[LanguageModel | None, Depends(get_language_model)]
 RerankerDep = Annotated[Reranker | None, Depends(get_reranker)]
 MetricsDep = Annotated[Metrics, Depends(get_metrics)]
+OidcDep = Annotated[OidcProvider, Depends(get_oidc)]
 DbSession = Annotated[Session, Depends(get_db)]
 SessionToken = Annotated[str | None, Depends(session_cookie)]
 

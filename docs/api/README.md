@@ -17,7 +17,7 @@ FastAPI generates the OpenAPI 3.1.0 document from the code, so the two can't dri
 - IDs are UUIDs. Times are ISO 8601 strings that include the time zone.
 - Lists come wrapped in an object: `{"items": [...]}`.
 - Every response has an `X-Request-ID` header with a new random ID. The same ID is in the body of an error, and on every log line written for the request. Request IDs sent by clients are ignored.
-- Every endpoint under `/api/v1` apart from registration, sign-in, and sign-out needs a signed-in user. Without one, it answers `401 not_authenticated`.
+- Every endpoint under `/api/v1` apart from registration, sign-in, sign-out, and the sign-in options and provider routes needs a signed-in user. Without one, it answers `401 not_authenticated`.
 
 ## Signing in
 
@@ -56,12 +56,23 @@ How sessions work:
 - **The CSRF header** works because other sites can't add it. A form on another site can't set headers at all. Another site's scripts can, but then the browser first checks with the API (a CORS preflight request), and only the configured origins pass.
 - **CORS** allows `http://localhost:5173`, the Vite dev server, in development. The production-style stack allows no other origins, since the web app and the API share one.
 - **Registration** can be turned off with `REGISTRATION_ENABLED=false`, and then answers `403 registration_disabled`.
+- **`AUTH_MODE`** says how people sign in: `local` (passwords, the default), `oidc` (only through an identity provider), or `both`. Without passwords, `register` and `login` answer `403 password_sign_in_disabled`.
 
 Accounts:
 
 - Emails are trimmed and lower-cased. They can be up to 320 characters long, and need one `@` with text on both sides and no spaces. Addresses aren't verified by sending an email.
 - Passwords need 12 to 128 characters to register. Sign-in accepts up to 128, which bounds the work of checking one.
 - Passwords are hashed with Argon2id. A wrong password and an unknown email get the same answer, `401 invalid_credentials`. Both check a password hash, so they also take about as long.
+
+### Signing in through an identity provider
+
+With `AUTH_MODE=oidc` or `both`, the API signs people in through one OpenID Connect provider ([security](../security/README.md#signing-in-through-an-identity-provider)). These routes are used by browsers, which follow their redirects; they aren't called with `fetch`.
+
+- `GET /api/v1/auth/options` says what to offer: `{"password": true, "registration": true, "provider_name": "Example ID"}`. `provider_name` is `null` when there's no provider. It needs no session.
+- `GET /api/v1/auth/oidc/login?return_to=/some/path` answers `302` to the provider and sets the short-lived `eka_oidc_login` cookie. `return_to` must be a path inside the app, or the answer is `400 invalid_return_path`. If the provider can't be reached, it answers `503 sign_in_unavailable`. Without a provider it answers `404 oidc_not_enabled`.
+- `GET /api/v1/auth/oidc/callback?code=…&state=…` is where the provider sends the browser back. It always answers `303`. On success it sets the `eka_session` cookie and goes to the stored return path. On a failure it goes to `/?sign_in_error=<code>` with one of `sign_in_refused`, `sign_in_expired`, `provider_unavailable`, `email_not_verified`, or `email_in_use`.
+
+These two routes are navigations, so they don't take the `X-CSRF-Protection` header; the one-use `state`, tied to the browser by the login cookie, protects them. Both count toward the sign-in rate limit.
 
 ## Endpoints
 
@@ -72,6 +83,9 @@ Accounts:
 | POST | `/api/v1/auth/register` | 201 | Creates an account and signs in |
 | POST | `/api/v1/auth/login` | 200 | Signs in |
 | POST | `/api/v1/auth/logout` | 204 | Signs out |
+| GET | `/api/v1/auth/options` | 200 | Says whether to offer a password, registration, and a provider |
+| GET | `/api/v1/auth/oidc/login` | 302 | Starts signing in through the identity provider |
+| GET | `/api/v1/auth/oidc/callback` | 303 | Finishes signing in through the identity provider |
 | GET | `/api/v1/auth/me` | 200 | Returns the signed-in user |
 | GET | `/api/v1/workspaces` | 200 | Lists your workspaces, oldest first |
 | POST | `/api/v1/workspaces` | 201 | Creates a workspace |
