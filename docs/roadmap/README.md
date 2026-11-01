@@ -1,6 +1,6 @@
 # Roadmap: later features
 
-The plan for four features that the [specification](../specification/README.md#15-decisions-intentionally-deferred) left for later: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider. It was written on 2026-10-31, after Phases 0 to 6. [Phase 7](#phase-7--hybrid-search-and-reranking) has since been built, but isn't finished. Phase 8 is implemented with local checks passed and branch CI pending; Phases 9 and 10 haven't been built yet. The order, Phases 7 to 10, is the owner's choice (D-80). The tasks are in the [task tracker](../tracker/01-task-tracker.md), and the decisions and risks named here, such as PD-09 and R-27, are in [decisions, risks, and issues](../tracker/03-decisions-risks-issues.md).
+The plan for four features that the [specification](../specification/README.md#15-decisions-intentionally-deferred) left for later: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider. It was written on 2026-10-31, after Phases 0 to 6. [Phase 7](#phase-7--hybrid-search-and-reranking) has since been built, but isn't finished. Phase 8 is implemented, merged to `main`, and CI-verified on the branch and `main`; Phases 9 and 10 have not been built yet. The order, Phases 7 to 10, is the owner's choice (D-80). The tasks are in the [task tracker](../tracker/01-task-tracker.md), and the decisions and risks named here, such as PD-09 and R-27, are in [decisions, risks, and issues](../tracker/03-decisions-risks-issues.md).
 
 > **This is a plan, not a result.** Each phase opens with a decision task that confirms or changes the design below. A feature that changes what users get, or adds a process or a cost, keeps today's behavior by default until a measurement, a test, or a review supports changing it. The plan promises no numbers: a result is reported only after it has been measured, with the conditions it was measured under.
 
@@ -9,7 +9,7 @@ The plan for four features that the [specification](../specification/README.md#1
 | Phase | Feature | What it adds | Settles | Off by default | Remarks |
 |---|---|---|---|---|---|
 | 7 | Hybrid search and reranking | Keyword search next to the vector search, the two lists merged by reciprocal rank fusion, and an optional model that reorders the passages | PD-09 | Yes: `RETRIEVAL_MODE=vector` | Judged on new questions that no setting was chosen with |
-| 8 | A durable queue for indexing | A `jobs` table in PostgreSQL with leases, attempts, and retries; parsing in a child process that can be stopped; an optional worker process | PD-08 | `INDEXING_RUNNER=embedded` remains the default; `worker` is opt-in | Implemented; local checks passed; branch CI pending. PostgreSQL is the queue, so no new service is needed |
+| 8 | A durable queue for indexing | A `jobs` table in PostgreSQL with leases, attempts, and retries; parsing in a child process that can be stopped; an optional worker process | PD-08 | `INDEXING_RUNNER=embedded` remains the default; `worker` is opt-in | Implemented and CI-verified on the branch and `main`. PostgreSQL is the queue, so no new service is needed |
 | 9 | A hosted language model | An adapter for OpenAI-compatible chat APIs, a daily limit on hosted calls, and a notice saying where questions go | PD-06 | Yes: `LLM_PROVIDER` stays `ollama` | No hosted call before the owner approves a vendor and its cost |
 | 10 | Sign-in through a provider | Sign-in through one configured OpenID Connect provider, with the API as the client | PD-10 | Yes: `AUTH_MODE=local` | One provider per deployment, not enterprise single sign-on |
 
@@ -125,7 +125,7 @@ Not in this phase: tuning the HNSW index, another embedding model, languages oth
 
 Settles PD-08. Tasks: [Phase 8 in the task tracker](../tracker/01-task-tracker.md#phase-8--a-durable-queue-for-indexing).
 
-**Status on 2026-11-01:** implemented; local backend checks and the manual worker-interruption recovery check passed. Branch CI is pending. One Windows memory sample during indexing used 134.4 MiB working set for the API and 762.7 MiB for the worker (private bytes: 852.6 MiB and 2,312.4 MiB respectively); this is one observation, not a benchmark. Worker mode remains opt-in. Compose was not run locally.
+**Status on 2026-11-01:** implemented and merged to `main` at `711b755`; local backend checks, the manual worker-interruption recovery check, CI, and the dependency audit passed. Compose was verified in CI only. One Windows memory sample during indexing used 134.4 MiB working set for the API and 762.7 MiB for the worker (private bytes: 852.6 MiB and 2,312.4 MiB respectively); this is one observation, not a benchmark. Worker mode remains opt-in. Compose was not run locally.
 
 ### Why
 
