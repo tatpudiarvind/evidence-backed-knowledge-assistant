@@ -149,6 +149,8 @@ services:
     <<: *hardening
     logging: *logging
     command: ["python", "-m", "app.worker"]
+    healthcheck:
+      disable: true
 
   web:
     build:
