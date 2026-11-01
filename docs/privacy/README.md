@@ -1,6 +1,6 @@
 # Privacy and data handling
 
-What the Evidence-backed Knowledge Assistant keeps, where it keeps it, for how long, and how to remove it. This page describes the code as of Phase 6 (2026-10-31), run on one computer: without containers, under the development stack (`compose.yaml`), or under the production-style stack (`compose.prod.yaml`). The requirements it follows are in the [specification](../specification/README.md#12-security-privacy-and-operational-requirements).
+What the Evidence-backed Knowledge Assistant keeps, where it keeps it, for how long, and how to remove it. This page describes the code as of Phase 7 (2026-11-01), run on one computer: without containers, under the development stack (`compose.yaml`), or under the production-style stack (`compose.prod.yaml`). The requirements it follows are in the [specification](../specification/README.md#12-security-privacy-and-operational-requirements).
 
 The assistant is a local demo of document retrieval and summarization. It isn't certified for regulated or clinical use, and its answers aren't professional, medical, legal, or financial advice. Upload only public, synthetic, or licensed documents you're allowed to use, and never real patient or confidential data.
 
@@ -12,13 +12,13 @@ The assistant is a local demo of document retrieval and summarization. It isn't 
 | Sign-in sessions: a hash of each session's token | PostgreSQL: `user_sessions` | Sign-out. An expired session stays until its user signs in again, but can't be used |
 | Workspaces: name and owner | PostgreSQL: `workspaces`, `workspace_memberships` | Local data is cleared; workspaces can't be deleted yet |
 | Uploaded files | The storage folder | The document is deleted |
-| Document details, and its text and embeddings in chunks | PostgreSQL: `documents`, `document_chunks` | The document is deleted |
+| Document details, and its text, embeddings, and indexed words in chunks | PostgreSQL: `documents`, `document_chunks` | The document is deleted |
 | Questions, answers, and citations | PostgreSQL: `questions`, `answers`, `citations` | 3 days after the question was asked, or sooner when a document an answer cites is deleted |
 | The session cookie | The browser | Sign-out, or 12 hours by default |
 | Logs | Standard error: a terminal, or Docker's container logs | As long as you keep them. The production-style stack keeps up to three files of 10 MB for each container |
 | nginx's access log, in the production-style stack only: each request's client address and full path | Docker's container logs | Up to three files of 10 MB, or until the container is removed |
 | Metrics and rate-limit counters | The API's memory | The API restarts |
-| The embedding model | `backend/models`, or the `embedding_models` volume | You delete it |
+| The embedding model, and the reranker if downloaded | `backend/models`, or the `embedding_models` volume | You delete them |
 
 ## What is stored
 
@@ -36,7 +36,7 @@ The assistant is a local demo of document retrieval and summarization. It isn't 
 - Uploading a document stores:
   - **the file**, under a random 32-character name in the storage folder's `documents` folder. The original file name is never used on disk. While a file arrives, it is written to the storage folder's `tmp` folder. A rejected, interrupted, or timed-out upload is deleted from there, so a partial file is left only if the API process itself stops mid-upload.
   - **its details**, in `documents`: the file name as shown (the original name, without folders or invisible characters), the file type, its size, its SHA-256 hash, the indexing status, and why indexing failed, if it did.
-  - **its text**, once indexed, in `document_chunks`: the document's text in chunks, each with its page number or section heading and its embedding, 384 numbers computed from the text. Embeddings are derived from the text, so treat them as just as sensitive.
+  - **its text**, once indexed, in `document_chunks`: the document's text in chunks, each with its page number or section heading, its embedding, 384 numbers computed from the text, and its words as indexed for keyword search, which PostgreSQL generates from the text. Both are derived from the text, so treat them as just as sensitive.
 - Downloads are sent with `Cache-Control: no-store`, so the browser shouldn't keep a cached copy. A copy you save is yours to look after.
 
 ### Questions and answers
@@ -66,11 +66,11 @@ Without containers:
 2. With PostgreSQL's `bin` folder on `PATH`, drop the database: `dropdb -U knowledge_assistant knowledge_assistant`. Drop `knowledge_assistant_eval` and `knowledge_assistant_test` too if they exist; the evaluation and the tests made them, and they hold only synthetic data.
 3. Delete the storage folder: `backend/storage`, or the folder `STORAGE_DIR` names.
 4. Delete logs you saved.
-5. Optionally, delete the embedding model: `backend/models`, or the folder `EMBEDDING_MODEL_DIR` names. It holds no user data, and you'll have to download it again.
+5. Optionally, delete the models: `backend/models`, or the folder `EMBEDDING_MODEL_DIR` names, which holds the embedding model and, if it was downloaded, the reranker. They hold no user data, and you'll have to download them again.
 
 To start again, create the database (`createdb -U knowledge_assistant knowledge_assistant`) and apply the migrations from `backend` (`uv run alembic upgrade head`).
 
-With Docker Compose, `docker compose down -v` removes the containers, with their logs, and the volumes: the database (`postgres_data`), the uploaded files (`document_storage`), the embedding model (`embedding_models`), and the web app's packages (`frontend_node_modules`).
+With Docker Compose, `docker compose down -v` removes the containers, with their logs, and the volumes: the database (`postgres_data`), the uploaded files (`document_storage`), the models (`embedding_models`), and the web app's packages (`frontend_node_modules`).
 
 Ollama keeps its models in its own folder. The app asks it to keep nothing; see [what leaves your computer](#what-leaves-your-computer).
 
@@ -106,9 +106,10 @@ Sign-in attempts (10 a minute) and registrations (10 an hour) are counted per ne
 | When | What is sent | To |
 |---|---|---|
 | `python -m app.cli download-embedding-model`, once | Requests for the model's files: BAAI/bge-small-en-v1.5, at a pinned revision. No documents or questions | Hugging Face |
+| `python -m app.cli download-reranker-model`, once, only for `RETRIEVAL_MODE=hybrid_rerank` | Requests for the reranker's files: cross-encoder/ms-marco-MiniLM-L6-v2, at a pinned revision. No documents or questions | Hugging Face |
 | Each question, with `LLM_PROVIDER=ollama` | The question and the passages found for it, labeled S1, S2, and so on. No document names, IDs, or account details | The Ollama server at `OLLAMA_BASE_URL` |
 
-- **Nothing else.** The API loads the embedding model from local files only, with Hugging Face's offline mode and telemetry turned off. The code has no hosted model provider: `LLM_PROVIDER` is `ollama` or `none`.
+- **Nothing else.** The API loads the embedding model, and the reranker, from local files only, with Hugging Face's offline mode and telemetry turned off. The reranker reads the question and its passages inside the API's process. The code has no hosted model provider: `LLM_PROVIDER` is `ollama` or `none`.
 - **Ollama.** By default it runs on your own computer, at `http://127.0.0.1:11434`. What Ollama logs or keeps is up to Ollama and its settings, not this app. If `OLLAMA_BASE_URL` names another computer, prompts travel there, unencrypted unless the address starts with `https://`.
 - **Setting up.** Installing dependencies (`uv sync`, `npm ci`) and pulling the Ollama model contact their registries. That is part of setting up, not of running the app.
 - **CI.** The project's CI runs on GitHub with synthetic test data only.

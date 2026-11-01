@@ -1,6 +1,6 @@
 # Roadmap: later features
 
-The plan for four features that the [specification](../specification/README.md#15-decisions-intentionally-deferred) left for later: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider. It was written on 2026-10-31, after Phases 0 to 6, and **nothing on this page has been built yet**. The order, Phases 7 to 10, is the owner's choice (D-80). The tasks are in the [task tracker](../tracker/01-task-tracker.md), and the decisions and risks named here, such as PD-09 and R-27, are in [decisions, risks, and issues](../tracker/03-decisions-risks-issues.md).
+The plan for four features that the [specification](../specification/README.md#15-decisions-intentionally-deferred) left for later: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider. It was written on 2026-10-31, after Phases 0 to 6. [Phase 7](#phase-7--hybrid-search-and-reranking) has since been built, but isn't finished, and **Phases 8 to 10 haven't been built yet**. The order, Phases 7 to 10, is the owner's choice (D-80). The tasks are in the [task tracker](../tracker/01-task-tracker.md), and the decisions and risks named here, such as PD-09 and R-27, are in [decisions, risks, and issues](../tracker/03-decisions-risks-issues.md).
 
 > **This is a plan, not a result.** Each phase opens with a decision task that confirms or changes the design below. A feature that changes what users get, or adds a process or a cost, keeps today's behavior by default until a measurement, a test, or a review supports changing it. The plan promises no numbers: a result is reported only after it has been measured, with the conditions it was measured under.
 
@@ -30,6 +30,8 @@ These rules apply to every phase. They follow the specification and the way Phas
 ## Phase 7 — Hybrid search and reranking
 
 Settles PD-09. Tasks: [Phase 7 in the task tracker](../tracker/01-task-tracker.md#phase-7--hybrid-search-and-reranking).
+
+**Status on 2026-11-01: built and partly measured, not finished.** P7-01 fixed the design and the rule for choosing the default before any run (D-81): `ts_rank` rather than `ts_rank_cd`, 20 candidates from each search, and `cross-encoder/ms-marco-MiniLM-L6-v2`, the owner's choice, as the reranker. By that rule, `vector` stays the default (D-82): on the held-out set, `hybrid`'s kept passages stated every fact for 42 of the 44 questions with facts, as `vector`'s did. Still to do: measure `hybrid_rerank`, whose model couldn't be downloaded on the computer used (B-03); the owner's review of the held-out set, which the runs used as drafted (P7-02); and a run in CI. The reranker was trained on MS MARCO, whose terms allow non-commercial research use only; `BAAI/bge-reranker-base`, licensed MIT, is the untried alternative. The results are on the [evaluation page](../evaluation/README.md#search-modes-and-the-held-out-set-phase-7). The design below is the plan as written before the build.
 
 ### Why
 

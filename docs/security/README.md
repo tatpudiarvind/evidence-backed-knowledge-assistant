@@ -1,6 +1,6 @@
 # Security
 
-How the Evidence-backed Knowledge Assistant protects accounts, workspaces, uploaded files, and answers, and what it doesn't protect against yet. This page describes the code as of Phase 6 (2026-10-31). The requirements it follows are in the [specification](../specification/README.md#12-security-privacy-and-operational-requirements). What is stored, logged, and sent, and for how long, is in [privacy and data handling](../privacy/README.md).
+How the Evidence-backed Knowledge Assistant protects accounts, workspaces, uploaded files, and answers, and what it doesn't protect against yet. This page describes the code as of Phase 7 (2026-11-01). The requirements it follows are in the [specification](../specification/README.md#12-security-privacy-and-operational-requirements). What is stored, logged, and sent, and for how long, is in [privacy and data handling](../privacy/README.md).
 
 The assistant is a portfolio demo of document retrieval, built to run on one computer. It isn't certified for regulated or clinical use, it hasn't been penetration-tested or reviewed by anyone independent, and its answers aren't professional, medical, legal, or financial advice. Upload only public, synthetic, or licensed documents you're allowed to use, and never real patient or confidential data.
 
@@ -49,7 +49,8 @@ Authorization is enforced by the API's database queries, not by the web app hidi
 
 - Every query that returns workspace data, whether workspaces, documents, files, passages, or questions, joins the signed-in user's membership of the workspace in SQL.
 - A workspace or document that isn't yours gets the same `404` as one that doesn't exist, such as "This document doesn't exist, or you don't have access to it.", so IDs can't be probed. IDs are random UUIDs, but isolation doesn't depend on keeping them secret.
-- The passage search joins the asker's membership too, and keeps only `ready` documents in the workspace asked about. The model is only ever shown passages the asker may read.
+- The passage searches, by meaning and, in the hybrid search modes, by the question's words, join the asker's membership too, and keep only `ready` documents in the workspace asked about. The model and the reranker are only ever shown passages the asker may read.
+- The keyword search passes PostgreSQL only the question's words, joined with `or`, as a query parameter, so a question can't add search operators.
 - An upload checks membership before the API reads the request body, so a non-member can't make the API store anything.
 - The question history lists only the signed-in user's own questions.
 - Workspaces can't be shared yet. The `member` role exists in the database for sharing later, but nothing grants it.
@@ -158,7 +159,7 @@ The stack serves plain HTTP to this computer only. [Operations](../operations/RE
 - The `Dependency audit` workflow (`.github/workflows/audit.yml`) checks the locked Python packages, development tools included, with pip-audit 2.10.1, and the web app's and the end-to-end tests' npm packages with `npm audit`. It runs on every push and pull request, every Monday at 06:37 UTC, and on demand. Its runs during Phase 6 found no known vulnerabilities.
 - `frontend/package.json` overrides minimatch, which only ESLint and typescript-eslint use, to 11.0.3. Every version below 11.0.1 has a moderate advisory (CVE-2026-118764), and those tools still ask for 10.x. Remove the override once they ask for 11.
 - The container images are pinned by tag: `python:3.12-slim`, `pgvector/pgvector:0.8.0-pg16`, and `nginxinc/nginx-unprivileged:1.30-alpine`.
-- The embedding model is pinned to a revision, downloaded once, and loaded from local files, with Hugging Face's offline mode and telemetry turned off.
+- The embedding model, and the reranker of `hybrid_rerank`, are each pinned to a revision, downloaded once, and loaded from local files, with Hugging Face's offline mode and telemetry turned off.
 - Updates are made by hand. Nothing opens update pull requests automatically.
 
 ## Known gaps

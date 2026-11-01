@@ -2,8 +2,8 @@
   "format_version": 1,
   "run": {
     "mode": "retrieval_only",
-    "started_at": "2026-10-29T13:00:02+00:00",
-    "seconds": 19.3,
+    "started_at": "2026-11-01T06:08:44+00:00",
+    "seconds": 34.3,
     "command": "python -m app.cli evaluate"
   },
   "data": {
@@ -57,6 +57,11 @@
     "chunk_overlap_characters": 150,
     "retrieval_top_k": 4,
     "retrieval_min_similarity": 0.5,
+    "retrieval_mode": "vector",
+    "retrieval_candidates": null,
+    "rrf_k": null,
+    "reranker_model": null,
+    "reranker_model_revision": null,
     "answer_context_characters": 6000,
     "language_model": null,
     "ollama_context_tokens": null,
@@ -92,7 +97,7 @@
       "sentence-transformers": "6.2.0",
       "transformers": "5.21.0",
       "torch": "2.14.1",
-      "pypdf": "6.21.3",
+      "pypdf": "6.21.4",
       "python-docx": "1.2.0"
     },
     "postgresql": "16.15",
@@ -221,6 +226,7 @@
     "lowest_needed_similarity": 0.5847,
     "highest_similarity_without_facts": 0.788
   },
+  "hybrid_search": null,
   "index_comparison": {
     "questions": 66,
     "plans": {
@@ -295,7 +301,7 @@
     "answer_seconds": {
       "count": 66,
       "median": 0.03,
-      "max": 0.1
+      "max": 0.06
     },
     "model_seconds": {
       "count": 0,

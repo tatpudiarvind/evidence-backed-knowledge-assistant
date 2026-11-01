@@ -1,6 +1,6 @@
 # Operations
 
-How to run the production-style stack on one computer: start it, check it, read its logs, back it up, upgrade it, and remove it, and how to run the end-to-end tests against it. This page describes the project as of Phase 6 (2026-10-31). The development stack, and running the app without containers, are in the [quickstart](../specification/README.md#local-quickstart). The [architecture guide](../architecture/README.md) explains what each part does, and the [security guide](../security/README.md) explains why the stack is built the way it is.
+How to run the production-style stack on one computer: start it, check it, read its logs, back it up, upgrade it, and remove it, and how to run the end-to-end tests against it. This page describes the project as of Phase 7 (2026-11-01). The development stack, and running the app without containers, are in the [quickstart](../specification/README.md#local-quickstart). The [architecture guide](../architecture/README.md) explains what each part does, and the [security guide](../security/README.md) explains why the stack is built the way it is.
 
 CI builds this stack on every push, starts it, downloads the embedding model into it, and runs the end-to-end tests against it ([what CI checks](#what-ci-checks)). It hasn't been run outside CI yet. Steps that CI doesn't cover are marked **Not tried yet**: try them on a spare copy before you rely on them.
 
@@ -18,7 +18,7 @@ Commands are for PowerShell, as in the quickstart, and run from the project root
 | Logs | Text by default, with no limit on how much Docker keeps | One JSON object per line; Docker keeps up to three files of 10 MB per container |
 | Containers' own files | Writable, with the backend's code mounted from `backend/app` | Read-only apart from the volumes and `/tmp`, with every Linux capability dropped, in the migration, API, and web containers. The database's container is set up as in development |
 
-Both read their settings from the same `.env` file, and both publish their ports on `127.0.0.1` only, so other computers can't reach them. Their data lives in separate volumes, so they can run at the same time without sharing anything; each API then loads its own copy of the embedding model.
+Both read their settings from the same `.env` file, and both publish their ports on `127.0.0.1` only, so other computers can't reach them. Their data lives in separate volumes, so they can run at the same time without sharing anything; each API then loads its own copy of the embedding model, and of the reranker in `hybrid_rerank` mode.
 
 ## Running the production-style stack
 
@@ -79,6 +79,31 @@ Two settings must stay in step with nginx's limits in `frontend/nginx.conf`, whi
 
 CI checks that the two stacks give the API the same list of settings.
 
+### Changing the search mode
+
+**Not tried yet** in either stack: CI runs both in the default mode.
+
+`RETRIEVAL_MODE` sets how the API finds a question's passages:
+
+| `RETRIEVAL_MODE` | How it finds passages | What it needs |
+|---|---|---|
+| `vector`, the default | By meaning only: the passages whose embeddings are closest to the question's, as in Phases 4 to 6 | The embedding model |
+| `hybrid` | Also by the question's words, with PostgreSQL's full-text search, then merges the two rankings by reciprocal rank fusion | Nothing more: the migrations index every passage's words |
+| `hybrid_rerank` | As `hybrid`, then a cross-encoder, run in the API's process, reorders the merged passages | The reranker too, downloaded once into the stack's volume |
+
+In the hybrid modes, each search returns up to `RETRIEVAL_CANDIDATES` passages (20 by default, and no fewer than `RETRIEVAL_TOP_K`), passages below `RETRIEVAL_MIN_SIMILARITY` are dropped from both lists, and `RRF_K` (60) is the k in reciprocal rank fusion's 1 / (k + rank). The first `RETRIEVAL_TOP_K` (4) are the evidence, as in `vector` mode. On the evaluation's held-out questions, `hybrid`'s kept passages stated every fact for 42 of the 44 questions with facts, as `vector`'s did, so `vector` stays the default. `hybrid_rerank` hasn't been measured ([evaluation](../evaluation/README.md#search-modes-and-the-held-out-set-phase-7)).
+
+For `hybrid_rerank`, download the reranker into this stack's volume, set `RETRIEVAL_MODE=hybrid_rerank` in `.env`, and apply it:
+
+```powershell
+docker compose -f compose.prod.yaml run --rm backend python -m app.cli download-reranker-model
+docker compose -f compose.prod.yaml up --detach --wait
+```
+
+The API loads the reranker at the first question that needs it. If it isn't downloaded, or fails, questions are still answered, with the passages in their merged order: the API logs a warning, and the metrics count it ([troubleshooting](#troubleshooting)).
+
+The reranker is `cross-encoder/ms-marco-MiniLM-L6-v2`, at a pinned revision. The model's own license is Apache-2.0, but it was trained on MS MARCO, whose terms allow non-commercial research use only. `BAAI/bge-reranker-base` is MIT-licensed, but hasn't been tried here. Like the embedding model's, the reranker's name and revision aren't in the list of settings the stacks pass to the API, so switching means adding `RERANKER_MODEL_NAME` and `RERANKER_MODEL_REVISION` to the list in both Compose files, setting them in `.env`, and downloading the new model.
+
 ## What runs
 
 | Service | Image | What it does | What can reach it |
@@ -98,11 +123,11 @@ The data lives in three volumes, whose full names start with `evidence-backed-kn
 |---|---|---|
 | `postgres_data` | The database: accounts, sessions, workspaces, the documents' details, their chunks and embeddings, and questions with their answers | Yes |
 | `document_storage` | The uploaded files, under random names | Yes, together with the database |
-| `embedding_models` | The embedding model | No: download it again |
+| `embedding_models` | The embedding model, and the reranker once downloaded | No: download them again |
 
 ### One API process
 
-The API runs as one Uvicorn process, on purpose. Its rate limits are counted in the process's memory, so several processes would each keep their own counts, and each would also start its own indexing and cleanup threads and load its own copy of the embedding model. One process still handles several requests at once. Running more than one needs the changes in [what a real deployment adds](#what-a-real-deployment-adds).
+The API runs as one Uvicorn process, on purpose. Its rate limits are counted in the process's memory, so several processes would each keep their own counts, and each would also start its own indexing and cleanup threads and load its own copies of the models. One process still handles several requests at once. Running more than one needs the changes in [what a real deployment adds](#what-a-real-deployment-adds).
 
 ### nginx
 
@@ -166,7 +191,7 @@ Docker keeps up to three files of 10 MB for each container, and deletes the olde
 
 ## Metrics
 
-Metrics are off by default (`METRICS_ENABLED=false`). Turned on, the API serves request, answer, and indexing counts at `/metrics`, in Prometheus's format ([API](../api/README.md#health-and-metrics)). nginx doesn't pass `/metrics` on, and the API isn't published, so only containers on the stack's network can read them, such as a Prometheus added to the stack. The counts live in the API's memory and start again from zero when it restarts.
+Metrics are off by default (`METRICS_ENABLED=false`). Turned on, the API serves request, answer, indexing, and reranker failure counts at `/metrics`, in Prometheus's format ([API](../api/README.md#health-and-metrics)). nginx doesn't pass `/metrics` on, and the API isn't published, so only containers on the stack's network can read them, such as a Prometheus added to the stack. The counts live in the API's memory and start again from zero when it restarts.
 
 **Not tried yet.** To read them once, from inside the API's container:
 
@@ -188,7 +213,7 @@ If the model can't be reached, or doesn't answer within `LLM_TIMEOUT_SECONDS` (1
 
 ## Backing up and restoring
 
-Back up the database (`postgres_data`) and the uploaded files (`document_storage`) together, while nothing changes them. The database lists each file by its storage name, so a database restored without its files lists documents that can't be downloaded or indexed again, and files restored without the database are orphans. The embedding model needn't be backed up; download it again.
+Back up the database (`postgres_data`) and the uploaded files (`document_storage`) together, while nothing changes them. The database lists each file by its storage name, so a database restored without its files lists documents that can't be downloaded or indexed again, and files restored without the database are orphans. The models needn't be backed up; download them again.
 
 A backup is a copy of every uploaded document and every recent question, so keep it where only you can read it, and encrypt it if it leaves the computer. Restoring a backup brings back whatever was deleted after it was made. History hides questions older than 3 days at once, and the cleanup deletes them when the API starts; delete documents again if they were deleted for a reason.
 
@@ -242,6 +267,7 @@ docker run --rm --volume evidence-backed-knowledge-assistant-production_document
 # Start the rest. The migrations bring the restored database up to date first.
 docker compose -f compose.prod.yaml up --detach --wait
 docker compose -f compose.prod.yaml run --rm backend python -m app.cli download-embedding-model
+# With RETRIEVAL_MODE=hybrid_rerank, run download-reranker-model the same way.
 ```
 
 - `--single-transaction` makes a failed restore leave the database empty, so it can simply be run again.
@@ -277,7 +303,7 @@ Python and npm packages stay at the versions in the lock files, whatever you pul
 | Stop the stack, keeping everything | `docker compose -f compose.prod.yaml stop` |
 | Start it again | `docker compose -f compose.prod.yaml up --detach --wait` |
 | Remove the containers, their logs, and the network, keeping the data | `docker compose -f compose.prod.yaml down` |
-| Also delete the database, the uploaded files, and the model | `docker compose -f compose.prod.yaml down --volumes` |
+| Also delete the database, the uploaded files, and the models | `docker compose -f compose.prod.yaml down --volumes` |
 | Also remove the images the stack built | Add `--rmi local` to `down` |
 
 `--volumes` can't be undone, and it doesn't touch backups you made.
@@ -349,6 +375,8 @@ Both jobs show every service's status and logs at the end, and remove their stac
 | `migrate` fails, and its log says `password authentication failed` | `POSTGRES_PASSWORD` changed after the database was created | Put the old password back in `.env`, or delete all the stack's data with `down --volumes` and start again |
 | The sign-in page says "API or database is unavailable" | A service has stopped, or isn't healthy | `ps --all`, then the logs of the service that isn't healthy |
 | Documents fail with "The embedding model isn't available on the server", and questions get `503 embedding_unavailable` | The model isn't in this stack's volume | Download it, then select **Retry** on the failed documents |
+| In `hybrid_rerank` mode, the API logs "Kept the fused order, because the reranker …" | The reranker isn't in this stack's volume, or couldn't run. Questions are still answered, without the reranking | Download it ([changing the search mode](#changing-the-search-mode)), or set `RETRIEVAL_MODE=hybrid` |
+| `migrate` or the API stops at start, and its log says "RETRIEVAL_CANDIDATES must be at least RETRIEVAL_TOP_K" | `RETRIEVAL_CANDIDATES` is below `RETRIEVAL_TOP_K` | Raise it, or lower `RETRIEVAL_TOP_K` |
 | Answers are passages, under "No language model is set up" | The default: no model is set up | [Using a language model](#using-a-language-model) |
 | Answers are passages, under "… didn't reply" | Ollama can't be reached, or took longer than `LLM_TIMEOUT_SECONDS` | Check that Ollama is running and that `COMPOSE_OLLAMA_BASE_URL` reaches it, or allow more time |
 | `502 api_unreachable` | The API isn't running, or nginx hasn't found a recreated API yet | `ps --all` and the API's logs. nginx finds a recreated API within about 10 seconds |
@@ -370,6 +398,7 @@ The production-style stack rehearses a deployment on one computer: plain HTTP to
 - **Monitoring and alerts**: health, error rates, disk space, and the metrics, collected privately.
 - **Restarts and updates**: restart policies, or a platform that restarts failed services; images pinned by digest, rebuilt regularly, and scanned. The weekly audit covers the Python and npm packages, not the images' system packages.
 - **Privacy that fits**: a privacy notice and retention periods for where it runs, and a review of any hosted model provider's data handling before user content goes to it ([privacy](../privacy/README.md), spec §12).
+- **Models whose licenses fit the use**: the reranker of `hybrid_rerank` was trained on MS MARCO, which is licensed for non-commercial research use only ([changing the search mode](#changing-the-search-mode)).
 - **One cloud, chosen after a cost estimate**, with least-privilege identity, a budget and billing alerts, short-lived resources, and teardown steps written before anything is created (spec §13). Avoid always-on databases, Kubernetes clusters, NAT gateways, and GPU instances for a demo, and don't assume any free tier lasts.
 
 Even then, the app isn't certified for regulated or clinical use, and it must not hold real patient, personal, or confidential data.

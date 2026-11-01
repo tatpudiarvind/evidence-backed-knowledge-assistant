@@ -224,14 +224,14 @@ The API answers `201 Created` with the question and its answer. This example is 
 
 ### Answers
 
-Only passages with a cosine similarity to the question of at least 0.5 (`RETRIEVAL_MIN_SIMILARITY`) count as evidence, from the 4 closest (`RETRIEVAL_TOP_K`). The answer then takes one of six forms:
+Only passages with a cosine similarity to the question of at least 0.5 (`RETRIEVAL_MIN_SIMILARITY`) count as evidence, and only the first 4 (`RETRIEVAL_TOP_K`) in the [search mode](../operations/README.md#changing-the-search-mode)'s order: by default the 4 closest, or in the hybrid modes the first 4 once the closest passages are merged with those that share the question's words, and reordered by a cross-encoder in `hybrid_rerank`. The answer then takes one of six forms:
 
 | `mode` | `abstention_reason` | `text` | `citations` | When |
 |---|---|---|---|---|
 | `generated` | `null` | The answer, with `[n]` markers | The passages it cites, numbered from 1 in the order cited | A language model answered from the passages, and cited them |
 | `generated` | `insufficient_evidence` | `null` | None | The model replied that the passages don't answer the question |
 | `generated` | `uncited_answer` | `null` | None | The model's reply cited none of the passages it was given, so it was dropped |
-| `search_only` | `null` | `null` | The evidence passages, closest first | No language model is configured, or it didn't reply. In that case, `model_name` names it |
+| `search_only` | `null` | `null` | The evidence passages, in the search's order: closest first by default | No language model is configured, or it didn't reply. In that case, `model_name` names it |
 | `search_only` | `weak_evidence` | `null` | None | No passage was similar enough to count as evidence |
 | `search_only` | `no_indexed_documents` | `null` | None | The workspace had no `ready` documents |
 
@@ -362,6 +362,7 @@ The web app adds one code of its own, `network_error`, when a request fails with
   - `http_request_duration_seconds`, a histogram by method and route.
   - `knowledge_assistant_answers_total`, by answer mode and outcome: `answered`, or the abstention reason.
   - `knowledge_assistant_documents_processed_total`, by outcome: `indexed`, `discarded` (deleted or changed while it was being indexed), or the failure code.
+  - `knowledge_assistant_reranker_failures_total`: in `hybrid_rerank` mode, the questions whose passages kept their merged order because the reranker failed.
 
   Routes are recorded as templates, such as `/api/v1/documents/{document_id}`, so no ID ever becomes a label. `/metrics` has no authentication, so leave it off, or let only your monitoring reach it. In the production-style stack, nginx doesn't pass it on, so only containers on the stack's own network can reach it.
 

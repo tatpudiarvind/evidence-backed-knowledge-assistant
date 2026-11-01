@@ -56,7 +56,7 @@ The portfolio goal is to turn the existing enterprise knowledge-assistant experi
 | Document parsing | pypdf for PDF (pypdfium2 as fallback), python-docx for DOCX, UTF-8 decoding for TXT | Permissive licenses (BSD-3-Clause, MIT) that suit the MIT-licensed repository; PyMuPDF is AGPL-3.0 or commercial. Keep parsing isolated behind an interface; preserve page/section metadata where possible. No OCR in the MVP: a scanned PDF without a text layer fails with a clear message. |
 | Embeddings | Sentence Transformers with `BAAI/bge-small-en-v1.5` (384 dimensions, MIT) on CPU, pinned to one revision: downloaded once with `python -m app.cli download-embedding-model`, then loaded without a network. `all-MiniLM-L6-v2` (384 dimensions, Apache-2.0) is the fallback | Local, repeatable, no per-call API bill. The model and its revision are pinned in the backend settings and left out of `.env.example` on purpose: vectors from different models don't match, and the vector column holds exactly 384 values, so another model means indexing every document again, plus a new migration if its vector size differs. Tests use a deterministic fake embedder, apart from one test with the real model. |
 | LLM | Provider interface; local Ollama adapter (default model Qwen3-4B-Instruct-2507, Apache-2.0, pinned as the Ollama tag `qwen3:4b-instruct-2507-q4_K_M`), called only by the backend, through Ollama's chat API at temperature 0 and with no tools offered; search-only mode (cited passages, no generated text) when no model is configured (`LLM_PROVIDER=none`) or the model doesn't reply; optional hosted adapter later | Local development avoids mandatory paid API; hosted provider is opt-in and clearly disclosed. Without a model, questions still return the passages that match. |
-| Retrieval | pgvector cosine similarity through the HNSW index, limited to the ready documents of the workspace asked about, and only for its members: the 4 closest passages (`RETRIEVAL_TOP_K`), of which those with a similarity of at least 0.5 (`RETRIEVAL_MIN_SIMILARITY`) count as evidence; add keyword/hybrid search only after baseline evaluation | Simple measurable first implementation; avoid premature complexity. Both numbers were chosen in Phase 5 from the evaluation, by rules fixed before it ran ([evaluation](../evaluation/README.md#choosing-the-settings)). |
+| Retrieval | pgvector cosine similarity through the HNSW index, limited to the ready documents of the workspace asked about, and only for its members: the 4 closest passages (`RETRIEVAL_TOP_K`), of which those with a similarity of at least 0.5 (`RETRIEVAL_MIN_SIMILARITY`) count as evidence. Since Phase 7, `RETRIEVAL_MODE` can also be `hybrid`, which adds PostgreSQL full-text search for the question's words over the same scope and merges the two rankings by reciprocal rank fusion, or `hybrid_rerank`, which then has a local cross-encoder, `cross-encoder/ms-marco-MiniLM-L6-v2`, reorder the merged passages; `vector` stays the default | Simple measurable first implementation; avoid premature complexity. Both numbers were chosen in Phase 5 from the evaluation, by rules fixed before it ran ([evaluation](../evaluation/README.md#choosing-the-settings)). `hybrid` tied with `vector` on a held-out question set, under a rule fixed before any run, so the simpler search stays the default; `hybrid_rerank` hasn't been measured. The reranker is licensed Apache-2.0, but it was trained on MS MARCO, whose terms allow non-commercial research use only; `BAAI/bge-reranker-base`, licensed MIT, is the alternative for commercial use, untried here ([search modes](../evaluation/README.md#search-modes-and-the-held-out-set-phase-7)). |
 | Ingestion | A background worker thread in the API process takes the oldest queued document from PostgreSQL (`FOR UPDATE SKIP LOCKED`); uploads and retries wake it, and it also checks every 5 seconds | Keeps slow parsing out of the HTTP request path without a separate service or queue. Run a single API process, because each process would start its own worker; documents left `processing` when the server stopped are queued again at the next start. If reliability requires a durable queue, add one later with tests and rationale (§15). |
 | Local runtime | Docker Compose: API, UI, PostgreSQL/pgvector. Ollama is optional and runs outside Compose; the Compose API answers with the matching passages unless it is configured to reach Ollama (see the quickstart) | Reproducible local environment; local model resource needs depend on the developer's machine. |
 | Observability | Python's standard logging, as text or one JSON object per line (`LOG_FORMAT`): one line per request with its route template, status, and duration, and every line logged during a request tagged with its ID; counters in Prometheus's format at `/metrics` (prometheus-client), served only when `METRICS_ENABLED=true` | Enough to find a reported error and see what the API does, without logging document text, prompts, or questions and answers. No tracing or log shipping in the MVP. |
@@ -83,6 +83,7 @@ flowchart LR
     QA --> RET[Retriever]
     QA --> EMB
     RET --> DB[(PostgreSQL + pgvector)]
+    RET -. hybrid_rerank mode only .-> RERANK[Local cross-encoder reranker]
     DOC --> DB
     ING --> DB
     QA --> DB
@@ -96,7 +97,7 @@ flowchart LR
     API --> OBS[Structured logs, metrics, health checks]
 ```
 
-The browser never connects directly to PostgreSQL, the embedding model, or the LLM provider. Secrets and provider configuration stay on the server. User-provided document text is untrusted input, including text that attempts to instruct the model.
+The browser never connects directly to PostgreSQL, the embedding model, the reranker, or the LLM provider. Secrets and provider configuration stay on the server. User-provided document text is untrusted input, including text that attempts to instruct the model.
 
 ## 6. End-to-end code flows
 
@@ -217,7 +218,7 @@ sequenceDiagram
     UI-->>User: Answer with links to its sources, or why there is none
 ```
 
-Implementation note: the question is embedded with the same local model as the documents. No database transaction stays open while the question is embedded or the model writes, which can take a minute or more with a local model (`LLM_TIMEOUT_SECONDS`, 120 by default), so before storing the answer the service checks the caller's membership again and locks the documents it cites; if one was deleted meanwhile, it stores nothing and returns `409`. The prompt has two messages: the rules, then the passages and the question. Passages are added whole, in rank order, while they fit a 6000-character budget (`ANSWER_CONTEXT_CHARACTERS`), and the API refuses to start if that budget, counted cautiously at 3 characters per token, doesn't leave 1792 tokens of the model's context window (`OLLAMA_CONTEXT_TOKENS`, 4096 by default) for the rules, the question, and an answer of up to 768 tokens. Passages are labeled S1, S2, and so on, without their document names, which are user-supplied text too, and each sits between begin and end markers that carry a random value chosen for each request, so a document can't fake the end of its passage. The rules say the passages are untrusted and never instructions, that every fact must come from them with a citation such as [S1], and that the reply must be exactly `INSUFFICIENT_EVIDENCE` when they don't answer the question. The reply check tidies the reply like document text, which removes characters PostgreSQL can't store, such as NUL, and invisible ones, such as direction overrides; keeps only citations to passages that were in the prompt; and renumbers them [1], [2], and so on, in order of first use. A reply containing `INSUFFICIENT_EVIDENCE`, or one without a valid citation, becomes an abstention, which keeps no text and no citations. Without a model, or when it doesn't reply, the evidence passages are the answer (`search_only`), so the user still sees where the documents discuss the question. The web app shows each answer with numbered links to its sources, each with its document, page or section, similarity, passage, and a download button, and lists the user's questions from the last 3 days.
+Implementation note: the question is embedded with the same local model as the documents. The diagram shows the default search, `RETRIEVAL_MODE=vector`. In the hybrid modes (Phase 7), the retriever also runs PostgreSQL's full-text search for any of the question's words over the same scope, takes up to 20 passages (`RETRIEVAL_CANDIDATES`) from each search, drops those below the minimum similarity, and merges the two rankings by reciprocal rank fusion (`RRF_K`, 60); `hybrid_rerank` then has a local cross-encoder score each merged passage against the question, and keeps the merged order if it fails. The first 4 are the evidence, as in `vector` mode. No database transaction stays open while the question is embedded or the model writes, which can take a minute or more with a local model (`LLM_TIMEOUT_SECONDS`, 120 by default), so before storing the answer the service checks the caller's membership again and locks the documents it cites; if one was deleted meanwhile, it stores nothing and returns `409`. The prompt has two messages: the rules, then the passages and the question. Passages are added whole, in rank order, while they fit a 6000-character budget (`ANSWER_CONTEXT_CHARACTERS`), and the API refuses to start if that budget, counted cautiously at 3 characters per token, doesn't leave 1792 tokens of the model's context window (`OLLAMA_CONTEXT_TOKENS`, 4096 by default) for the rules, the question, and an answer of up to 768 tokens. Passages are labeled S1, S2, and so on, without their document names, which are user-supplied text too, and each sits between begin and end markers that carry a random value chosen for each request, so a document can't fake the end of its passage. The rules say the passages are untrusted and never instructions, that every fact must come from them with a citation such as [S1], and that the reply must be exactly `INSUFFICIENT_EVIDENCE` when they don't answer the question. The reply check tidies the reply like document text, which removes characters PostgreSQL can't store, such as NUL, and invisible ones, such as direction overrides; keeps only citations to passages that were in the prompt; and renumbers them [1], [2], and so on, in order of first use. A reply containing `INSUFFICIENT_EVIDENCE`, or one without a valid citation, becomes an abstention, which keeps no text and no citations. Without a model, or when it doesn't reply, the evidence passages are the answer (`search_only`), so the user still sees where the documents discuss the question. The web app shows each answer with numbered links to its sources, each with its document, page or section, similarity, passage, and a download button, and lists the user's questions from the last 3 days.
 
 Limitations (the [Phase 5 evaluation](../evaluation/README.md) measured some of them, with 66 questions about 4 short synthetic documents, run once on one computer; its numbers hold only under those conditions):
 
@@ -344,6 +345,7 @@ classDiagram
       +int page_number
       +string section
       +vector embedding
+      +tsvector search_vector
     }
     class Question {
       +UUID id
@@ -402,6 +404,10 @@ classDiagram
       <<interface>>
       +generate(messages) Generation
     }
+    class Reranker {
+      <<interface>>
+      +score(question, texts) float[]
+    }
     class Storage {
       <<interface>>
       +put(file, key)
@@ -419,6 +425,7 @@ classDiagram
       <<interface>>
       +replace_for_document(id, chunks)
       +search_workspace(workspace_id, user_id, vector, top_k) Passage[]
+      +keyword_search(workspace_id, user_id, query, vector, limit) Passage[]
       +delete_for_document(id)
     }
     class QuestionRepository {
@@ -449,6 +456,7 @@ classDiagram
     IngestionService --> ChunkRepository
     QuestionAnswerService --> EmbeddingProvider
     QuestionAnswerService --> ChunkRepository
+    QuestionAnswerService --> Reranker
     QuestionAnswerService --> Grounding
     QuestionAnswerService --> LLMProvider
     QuestionAnswerService --> DocumentRepository
@@ -456,7 +464,7 @@ classDiagram
     QuestionCleanupWorker --> QuestionRepository
 ```
 
-In this diagram, `ChunkRepository.search_workspace` plays the retriever of §5 and §6.2, and `Grounding` is a module of plain functions.
+In this diagram, `ChunkRepository.search_workspace` plays the retriever of §5 and §6.2; in the hybrid modes, `keyword_search` and the `Reranker` join it (§6.2). `Grounding` is a module of plain functions.
 
 ## 9. Data model and API contract
 
@@ -467,7 +475,7 @@ In this diagram, `ChunkRepository.search_workspace` plays the retriever of §5 a
 - `workspaces`: ID, name, owner ID, created timestamp.
 - `workspace_memberships`: workspace ID, user ID, role, unique constraint on the pair.
 - `documents`: ID, workspace ID, original display name, opaque storage key, MIME type, byte size, SHA-256, status, safe failure code/message, timestamps.
-- `document_chunks`: ID, document ID, ordinal (reading order), text, page number (PDF) or section heading (DOCX), a 384-dimension embedding vector, created timestamp. Unique per document and ordinal, which also indexes the foreign key; deleted with their document. Vector search uses an HNSW index on cosine distance with pgvector's default settings; revisit the index choice against the measured dataset size and evaluation results.
+- `document_chunks`: ID, document ID, ordinal (reading order), text, page number (PDF) or section heading (DOCX), a 384-dimension embedding vector, a `tsvector` of the text that PostgreSQL generates and stores with its English configuration (Phase 7), created timestamp. Unique per document and ordinal, which also indexes the foreign key; deleted with their document. Vector search uses an HNSW index on cosine distance with pgvector's default settings, and keyword search a GIN index on the `tsvector`; revisit the index choice against the measured dataset size and evaluation results.
 - `questions`, `answers`, `citations`: store only what is needed for usability/evaluation, and delete it 3 days (72 hours) after the question was asked. A question records who asked it, its workspace, its text (tidied onto one line, 1 to 1000 characters), and when it was asked. Its one answer records the mode (`generated` by a model, or `search_only`), the text (only for a generated answer that doesn't abstain), the abstention reason if any (`no_indexed_documents`, `weak_evidence`, `insufficient_evidence`, or `uncited_answer`), and the model asked, if any; database checks keep these consistent. Each citation records its number in the answer ([1], [2], and so on), the document, the chunk (and so its page or section), and the chunk's similarity to the question when it was asked. Only the user who asked can see a question. Expired questions are never returned, even before the cleanup has run, and the cleanup runs when the API starts and then every hour. Deleting a document also deletes the questions whose answers cite it, because an answer can quote its sources, and deleting a workspace deletes its questions. Question and answer text is never logged.
 
 ### Initial REST endpoints
@@ -492,7 +500,7 @@ Limits: sign-in attempts and registrations are counted per network address (10 a
 
 ## 10. Implementation roadmap and definition of done
 
-Phases 7 to 10 are planned, not built. They take up four of the decisions deferred in §15, and the [roadmap](../roadmap/README.md) describes the design, the evaluation, and the risks of each.
+Phases 7 to 10 take up four of the decisions deferred in §15, and the [roadmap](../roadmap/README.md) describes the design, the evaluation, and the risks of each. Phase 7 is built and partly measured; Phases 8 to 10 are planned, not built.
 
 ### Phase 0 — Confirm environment and decisions
 - Check Python/Node/Docker versions and available memory/disk before choosing local model sizes.
@@ -530,11 +538,12 @@ Phases 7 to 10 are planned, not built. They take up four of the decisions deferr
 - **Done when:** an external reviewer can understand the architecture, run the app, inspect tests/evaluation, and reproduce the demo. Cloud deployment is optional; no permanent free tier is assumed.
 - **Outcome:** the production-style stack (`compose.prod.yaml`), in which nginx serves the built web app; end-to-end tests in `e2e/`, with automated accessibility checks, run against it in CI; demo files; the [screenshots](../screenshots/README.md); the [architecture](../architecture/README.md), [API](../api/README.md), [security](../security/README.md), and [operations](../operations/README.md) guides; and a list of limitations in the root `README.md`. The optional cloud deployment is deferred, so the app hasn't been deployed; the operations guide lists [what a real deployment adds](../operations/README.md#what-a-real-deployment-adds).
 
-### Phase 7 — Hybrid search and reranking (planned)
+### Phase 7 — Hybrid search and reranking (in progress)
 - Add keyword search, with PostgreSQL's full-text search, next to the vector search; merge the two lists by reciprocal rank fusion; and optionally reorder the merged passages with a cross-encoder that runs on the CPU.
 - Use the same workspace scope and the same evidence threshold in every mode, and keep today's vector search as the default until an evaluation supports a change.
 - Write and freeze a new, reviewed question set, and fix the rule for choosing the default, before any run.
 - **Done when:** every mode has been measured on both question sets, the default has been chosen by the rule fixed in advance (keeping vector search is a valid result), and the tests pass locally and in CI.
+- **Outcome so far:** `RETRIEVAL_MODE` selects `vector`, `hybrid`, or `hybrid_rerank`, and the keyword search reads a `tsvector` column that PostgreSQL generates from each chunk's text, through a GIN index. On the held-out set, the 4 kept passages stated every expected fact for 42 of its 44 questions with facts in both `vector` and `hybrid` modes, short of the margin of 2 fixed in advance, so vector search stays the default. Not done yet: `hybrid_rerank` is unmeasured, because its model couldn't be downloaded on the computer used; the held-out set was used before the owner reviewed it, so a change from that review means repeating the runs; and Phase 7 hasn't run in CI. The [evaluation](../evaluation/README.md#search-modes-and-the-held-out-set-phase-7) gives the results and their conditions.
 - **Plan:** [Phase 7 in the roadmap](../roadmap/README.md#phase-7--hybrid-search-and-reranking).
 
 ### Phase 8 — A durable queue for indexing (planned)
@@ -599,15 +608,15 @@ Resume bullet template (replace brackets with verified values): “Built a Pytho
 
 ## 15. Decisions intentionally deferred
 
-Four of these now have a plan, Phases 7 to 10 in the [roadmap](../roadmap/README.md), but none is built or settled yet: each phase opens with a decision, and today's behavior stays the default until a measurement, a test, or a review supports a change. The cloud, replacing the default local model, and answering outside the request stay deferred.
+Four of these now have a plan, Phases 7 to 10 in the [roadmap](../roadmap/README.md). Each phase opens with a decision, and today's behavior stays the default until a measurement, a test, or a review supports a change. Phase 7 is built, and kept vector search as the default, but its reranking mode is still unmeasured; Phases 8 to 10 aren't built or settled yet. The cloud, replacing the default local model, and answering outside the request stay deferred.
 
 - Hosted model vendor and exact model, based on privacy, cost, availability, and evaluation. Planned as [Phase 9](../roadmap/README.md#phase-9--a-hosted-language-model); no vendor is chosen without the owner's approval of its terms and cost.
 - Whether a newer, permissively licensed small model should replace the default local model (`qwen3:4b-instruct-2507-q4_K_M`), based on evaluation.
 - Cloud provider and deployment service, pending current target-job research and cost estimate.
 - Whether durable queueing is needed, based on observed ingestion reliability and workload. Planned as [Phase 8](../roadmap/README.md#phase-8--a-durable-queue-for-indexing), with PostgreSQL as the queue.
 - Whether answers should be written outside the HTTP request (a queue, or streamed replies), if waiting for the model holds up the API.
-- Keyword/hybrid search, reranking, and additional vector index tuning, based on evaluation evidence. Hybrid search and reranking are planned as [Phase 7](../roadmap/README.md#phase-7--hybrid-search-and-reranking); index tuning stays deferred.
-- Re-tuning the evidence threshold (0.5) and the number of passages per question (4), which Phase 5 chose using the same questions it scored them on, once a larger, independently reviewed question set exists. Phase 7's new question set checks them, without re-tuning them.
+- Keyword/hybrid search, reranking, and additional vector index tuning, based on evaluation evidence. Hybrid search and reranking were built in [Phase 7](../roadmap/README.md#phase-7--hybrid-search-and-reranking) and are available as settings: `hybrid` tied with vector search on the held-out set, so vector search stays the default, and whether reranking helps waits until its model can be downloaded and measured ([the choice](../evaluation/README.md#the-choice)). Index tuning stays deferred.
+- Re-tuning the evidence threshold (0.5) and the number of passages per question (4), which Phase 5 chose using the same questions it scored them on, once a larger, independently reviewed question set exists. Phase 7's held-out set checked them without re-tuning them: Phase 5's rules would choose 6 passages and the same threshold on it, but the set hasn't been reviewed, and changing a setting is a decision of its own ([the held-out set with the model](../evaluation/README.md#the-held-out-set-with-the-model)).
 - Full authentication provider, if the project is used beyond a portfolio demo. Planned as [Phase 10](../roadmap/README.md#phase-10--sign-in-through-an-openid-connect-provider): one OpenID Connect provider per deployment.
 
 ## 16. Suggested first implementation milestone
@@ -616,7 +625,7 @@ The first coding milestone should be **Phase 1 only**: create a clean repository
 
 ## Local quickstart
 
-What works today (Phases 1 to 6): create a local account and workspaces, then upload, list, download, and delete PDF, Word (.docx), and plain-text files. Each uploaded document is indexed in the background: its text is extracted, split into chunks, and embedded with a local model, while its status moves from **Queued** through **Processing** to **Ready**. A document that can't be indexed shows **Failed**, a message that says what to do, and a **Retry** button. Once a document is **Ready**, ask questions about the workspace's documents. With a local Ollama model, the answer is written from the closest passages and cites them by document and page or section; without one, the closest passages are the answer. When the documents don't cover a question, you're told so instead of getting a guess. Questions and answers are deleted after 3 days, or sooner if you delete a document they cite. Retrieval and answers were measured on a small synthetic set; the [evaluation](../evaluation/README.md) gives the numbers and the conditions they hold under. Upload only documents you are allowed to use, and never real patient or confidential data.
+What works today (Phases 1 to 6, and Phase 7's search modes): create a local account and workspaces, then upload, list, download, and delete PDF, Word (.docx), and plain-text files. Each uploaded document is indexed in the background: its text is extracted, split into chunks, and embedded with a local model, while its status moves from **Queued** through **Processing** to **Ready**. A document that can't be indexed shows **Failed**, a message that says what to do, and a **Retry** button. Once a document is **Ready**, ask questions about the workspace's documents. With a local Ollama model, the answer is written from the closest passages and cites them by document and page or section; without one, the closest passages are the answer. When the documents don't cover a question, you're told so instead of getting a guess. Passages are found by meaning; `RETRIEVAL_MODE=hybrid` also matches the question's words, and `hybrid_rerank` then reorders the passages with a reranker, downloaded once with `python -m app.cli download-reranker-model`. Questions and answers are deleted after 3 days, or sooner if you delete a document they cite. Retrieval and answers were measured on small synthetic sets; the [evaluation](../evaluation/README.md) gives the numbers and the conditions they hold under. Upload only documents you are allowed to use, and never real patient or confidential data.
 
 From the project root, copy `.env.example` to `.env`; Docker Compose, the API, and the Vite dev server all take their settings from this one file. Then run:
 
