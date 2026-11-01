@@ -623,4 +623,31 @@ describe("QuestionPanel", () => {
     typeQuestion("a".repeat(999));
     expect(screen.getByText("1 character left")).toBeInTheDocument();
   });
+
+  it("warns before a hosted provider receives questions, and says nothing for a local model", async () => {
+    installFetch({
+      [HISTORY]: listOf(),
+      "GET /api/v1/model": jsonResponse({
+        provider: "openai_compatible",
+        model_name: "example-model",
+        sends_text_off_device: true,
+      }),
+    });
+    const hosted = renderPanel();
+    expect(await screen.findByText("Sent to a hosted provider.")).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("example-model");
+    hosted.unmount();
+
+    installFetch({
+      [HISTORY]: listOf(),
+      "GET /api/v1/model": jsonResponse({
+        provider: "ollama",
+        model_name: "local-model",
+        sends_text_off_device: false,
+      }),
+    });
+    renderPanel();
+    await screen.findByText(NO_QUESTIONS);
+    expect(screen.queryByText("Sent to a hosted provider.")).not.toBeInTheDocument();
+  });
 });

@@ -28,7 +28,7 @@ from app.core.middleware import (
 from app.core.rate_limits import RateLimits
 from app.core.security import PasswordHashing
 from app.providers.embeddings import EmbeddingProvider, SentenceTransformerEmbeddings
-from app.providers.llm import LanguageModel, OllamaChatModel
+from app.providers.llm import LanguageModel, OllamaChatModel, OpenAICompatibleChatModel
 from app.providers.rerankers import CrossEncoderReranker, Reranker
 from app.providers.storage import LocalDocumentStorage
 from app.services.ingestion import DocumentIndexer
@@ -58,6 +58,8 @@ def create_app(
     # Without a model, answers list the passages that match the question.
     if language_model is None and settings.llm_provider == "ollama":
         language_model = OllamaChatModel(settings)
+    elif language_model is None and settings.llm_provider == "openai_compatible":
+        language_model = OpenAICompatibleChatModel(settings)
     # Only hybrid_rerank uses a reranker. Like the embedding model, it loads on first use.
     if reranker is None and settings.retrieval_mode == "hybrid_rerank":
         reranker = CrossEncoderReranker(settings)

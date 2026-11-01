@@ -110,9 +110,12 @@ The evaluation planted instructions in its documents and questions. In its one r
 ## The language model
 
 - Only the API calls the model. The browser never does, and in the production stack the Content Security Policy only lets the page connect to its own origin.
-- `LLM_PROVIDER` is `ollama` or `none`. The code has no hosted model provider. `OLLAMA_BASE_URL` must be an `http://` or `https://` URL, and is on this computer by default.
+- `LLM_PROVIDER` is `ollama` (the default), `openai_compatible` or `none`. `OLLAMA_BASE_URL` must be an `http://` or `https://` URL, and is on this computer by default.
+- `openai_compatible` reaches any server that speaks the OpenAI chat completions API through `LLM_BASE_URL`, `LLM_MODEL` and, for a hosted one, `LLM_API_KEY`. The settings are refused at startup unless the URL is `http://` or `https://` with no login in it, and a host that isn't this computer uses `https://` and has a key. The key is a secret setting: it is sent only in the `Authorization` header, never logged, and left out of any printout of the settings. Redirects are not followed, so the key can't be carried to another host. The reply is only ever text: no tools or functions are offered to the model.
+- A busy or failing hosted provider (429, 500, 502, 503, 504, or no connection) is tried again up to `LLM_MAX_RETRIES` times, waiting as long as `Retry-After` says (at most 30 seconds) or else backing off from a second. Other errors aren't retried. At most `LLM_DAILY_CALL_LIMIT` hosted calls are made per UTC day, counted in PostgreSQL, so a loop or a stolen account can't run up an unbounded bill. Past it, nothing is sent and answers list the matching passages. The limit caps calls, not what each one costs, and it is not a billing alert (R-28).
 - Each call has a time limit (`LLM_TIMEOUT_SECONDS`, 120 seconds by default), the answer is limited to 768 tokens, and a response over 1 MiB is refused. If the model can't be reached, takes too long, or replies with something unexpected, the question is answered with passages only.
-- Prompts and replies are never logged (`test_llm`).
+- Prompts, replies, and the key are never logged (`test_llm`, `test_llm_openai_compatible`). Only a status code or an error type is.
+- No hosted provider has been called by this project's tests or by the owner, and none is chosen: that needs the owner's approval of a vendor and its cost, and a review of its data handling ([privacy](../privacy/README.md#what-leaves-your-computer)).
 - Ollama has no authentication of its own (R-17). Keep it listening on `127.0.0.1`, and stop it when you don't need it.
 
 ## Limits on requests

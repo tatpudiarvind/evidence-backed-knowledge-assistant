@@ -554,10 +554,10 @@ Phases 7 to 10 take up four of the decisions deferred in section 15, and the [ro
 - Automated queue and parser-child failure tests pass. A live Windows check killed the worker while indexing; lease recovery completed the job on its second attempt with 850 distinct chunk ordinals. In one sample during indexing, the API used 134.4 MiB working set and 852.6 MiB private bytes; the worker used 762.7 MiB working set and 2,312.4 MiB private bytes. One observation, not a benchmark; worker mode stays opt-in. Compose was not run locally; CI verified the Compose worker service.
 - **Plan and design record:** [Phase 8 in the roadmap](../roadmap/README.md#phase-8--a-durable-queue-for-indexing).
 
-### Phase 9 — A hosted language model (planned)
-- Add an adapter for OpenAI-compatible chat APIs behind the language-model interface, with the same prompt, limits, and citation check, built and tested against a local endpoint first.
-- Keep the local model as the default, record which provider wrote each answer, tell users before anything is sent to a hosted provider, and cap hosted calls per day.
-- **Done when:** the adapter passes its tests without a hosted account, answers record their provider, and a hosted evaluation has run only if the owner approved a vendor and its cost.
+### Phase 9 — A hosted language model (implemented; no vendor evaluated)
+- An adapter for OpenAI-compatible chat APIs (`LLM_PROVIDER=openai_compatible`) sits behind the language-model interface, with the same prompt, limits, and citation check. It uses the standard library HTTP client, refuses redirects, sends the key only in the Authorization header, and retries only rate-limit, server, and connection errors, a limited number of times.
+- The local model stays the default. Each answer records its provider, the interface says "Sent to a hosted provider." before a question is asked when text would leave the computer, and hosted calls are capped per UTC day (default 200); past the cap an answer shows the matching passages only.
+- **Done when:** the adapter passes its tests without a hosted account, answers record their provider, and a hosted evaluation has run only if the owner approved a vendor and its cost. The first two hold; no vendor has been chosen or called, so no hosted evaluation has run.
 - **Plan:** [Phase 9 in the roadmap](../roadmap/README.md#phase-9--a-hosted-language-model).
 
 ### Phase 10 — Sign-in through an OpenID Connect provider (planned)

@@ -18,7 +18,7 @@ As of 2026-11-01, Phases 0 to 6 and Phase 8 of the [roadmap](docs/specification/
 
 **Measured on 2026-10-29,** in one run, on one computer, with 66 questions about 4 short synthetic documents and settings chosen using the same questions, so this is not a benchmark: the 4 passages kept for each question stated every expected fact for 52 of the 54 questions that have facts. With the local model, the answers stated every fact for 48 of those 54, and 57 of their 61 citations pointed to a passage stating a fact; all 12 questions without facts were declined. Reading the 50 written answers found 2 wrong and 1 misleading. The [evaluation](docs/evaluation/README.md) has the details and limits.
 
-**Next:** a hosted language model and sign-in through an OpenID Connect provider, as Phases 9 and 10 of the [plan for later features](docs/roadmap/README.md). Each keeps today's behavior by default until a measurement, a test, or a review supports a change.
+**Next:** sign-in through an OpenID Connect provider, as Phase 10 of the [plan for later features](docs/roadmap/README.md). An adapter for a hosted, OpenAI-compatible language model (Phase 9) is implemented and tested against a stub server; no hosted vendor has been chosen or called. Each keeps today's behavior by default until a measurement, a test, or a review supports a change.
 
 Progress, checks, and decisions are recorded in the [project tracker](docs/tracker/README.md).
 
@@ -47,7 +47,7 @@ Every project document is in [`docs`](docs/README.md), with a folder for each ki
 |---|---|---|
 | [Documents index](docs/README.md) | The folders in `docs` and what each one holds | Start here to browse |
 | [Specification](docs/specification/README.md) | Goals, user stories, architecture and diagrams, code layout, data model and API, roadmap, testing, security, costs, and the local quickstart | The source of truth. It was this README until 2026-10-29 |
-| [Roadmap for later features](docs/roadmap/README.md) | The plan for Phases 7 to 10: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider | Phase 8 is implemented and CI-verified. Phases 9 and 10 are planned |
+| [Roadmap for later features](docs/roadmap/README.md) | The plan for Phases 7 to 10: hybrid search and reranking, a durable queue for indexing, a hosted language model, and sign-in through an OpenID Connect provider | Phases 7 and 8 are implemented and CI-verified. Phase 9 is implemented and tested locally. Phase 10 is planned |
 | [Architecture](docs/architecture/README.md) | How the code is built: the runtime view, the backend's layers, how a request is handled, background work, answering a question, the data model, the web app, and the main design choices and their limits | Diagrams of the code as it is |
 | [API](docs/api/README.md) | Every endpoint: signing in, workspaces, documents, questions, errors and their codes, health and metrics, and limits | The interactive reference is at `/docs` on the development API |
 | [Security](docs/security/README.md) | How accounts, workspaces, uploads, and answers are protected, the production stack, dependencies, and the known gaps | Not certified for regulated use |

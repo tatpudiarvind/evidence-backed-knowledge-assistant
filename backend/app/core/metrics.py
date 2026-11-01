@@ -66,6 +66,26 @@ class Metrics:
             "Questions whose candidates kept their fused order because the reranker failed.",
             registry=self.registry,
         )
+        self._llm_calls = Counter(
+            "knowledge_assistant_llm_calls",
+            "Language model calls, by provider and outcome: ok, unavailable, or limit_reached "
+            "(the daily limit on a hosted provider; nothing was sent).",
+            ("provider", "outcome"),
+            registry=self.registry,
+        )
+        self._llm_tokens = Counter(
+            "knowledge_assistant_llm_tokens",
+            "Tokens that providers reported for answered calls, by kind: prompt or completion.",
+            ("kind",),
+            registry=self.registry,
+        )
+
+    def count_llm_call(self, provider: str, outcome: str) -> None:
+        self._llm_calls.labels(provider, outcome).inc()
+
+    def count_llm_tokens(self, prompt: int, completion: int) -> None:
+        self._llm_tokens.labels("prompt").inc(prompt)
+        self._llm_tokens.labels("completion").inc(completion)
 
     def count_request(self, method: str, route: str, status: int | None, seconds: float) -> None:
         """`status` is None for a request that got no response, as when its client left."""

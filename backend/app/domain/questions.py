@@ -61,6 +61,9 @@ class AnswerRecord:
     # The model that was asked, if one was.
     model_name: str | None
     citations: tuple[CitationRecord, ...]
+    # The provider of that model: "ollama" or "openai_compatible"; None for older answers
+    # and for stand-ins.
+    model_provider: str | None = None
 
     @property
     def abstained(self) -> bool:

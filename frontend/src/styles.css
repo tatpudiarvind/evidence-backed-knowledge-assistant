@@ -1074,6 +1074,17 @@ h1 {
   margin-top: 14px;
 }
 
+.hosted-notice {
+  margin: 14px 0 0;
+  padding: 10px 14px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 .question-history {
   margin-top: 28px;
 }

@@ -29,6 +29,7 @@ flowchart LR
         PGData[("postgres_data<br/>volume")]
     end
     Ollama["Ollama<br/>optional, outside the stack"]
+    Hosted["OpenAI-compatible server<br/>optional; hosted unless on this computer"]
     Browser -->|"pages, /api/, /health/"| Web
     Web -->|"/api/ and /health/"| API
     API --> DB
@@ -38,6 +39,7 @@ flowchart LR
     Worker --- Files
     Worker --- Models
     API -.->|"only with LLM_PROVIDER=ollama"| Ollama
+    API -.->|"only with LLM_PROVIDER=openai_compatible"| Hosted
 ```
 
 The `worker` Compose service is in the optional `worker` profile; CI enables it explicitly. Both stacks keep `embedded` as the default. The two Compose stacks differ like this:
@@ -267,6 +269,13 @@ erDiagram
         text text
         string abstention_reason
         string model_name
+        string model_provider "ollama or openai_compatible"
+    }
+    llm_usage {
+        date day PK "UTC"
+        int calls "hosted calls that day"
+        bigint prompt_tokens
+        bigint completion_tokens
     }
     citations {
         uuid id PK

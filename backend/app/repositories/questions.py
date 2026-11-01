@@ -44,6 +44,7 @@ def add_answered(
         text=answer.text,
         abstention_reason=answer.abstention_reason and answer.abstention_reason.value,
         model_name=answer.model_name,
+        model_provider=answer.model_provider,
     )
     session.add(answer_row)
     session.flush()
@@ -100,6 +101,7 @@ def list_recent_for_member(
                 AbstentionReason(answer.abstention_reason) if answer.abstention_reason else None,
                 answer.model_name,
                 tuple(citations[answer.id]),
+                answer.model_provider,
             ),
         )
         for question, answer in rows

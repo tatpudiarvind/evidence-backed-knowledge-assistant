@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
@@ -8,6 +8,7 @@ from sqlalchemy import (
     BigInteger,
     CheckConstraint,
     Computed,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -239,6 +240,20 @@ class Answer(Base):
     abstention_reason: Mapped[str | None] = mapped_column(String(30))
     # The model that was asked, if one was; a search-only answer names it if it didn't reply.
     model_name: Mapped[str | None] = mapped_column(String(200))
+    # Which provider that model belongs to: "ollama" or "openai_compatible" (Phase 9).
+    model_provider: Mapped[str | None] = mapped_column(String(30))
+
+
+class LlmUsage(Base):
+    """Calls made to a hosted provider on one UTC day, and the tokens it reported (Phase 9)."""
+
+    __tablename__ = "llm_usage"
+    __table_args__ = (CheckConstraint("calls >= 0", "calls_non_negative"),)
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    calls: Mapped[int] = mapped_column(server_default="0")
+    prompt_tokens: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    completion_tokens: Mapped[int] = mapped_column(BigInteger, server_default="0")
 
 
 class Citation(Base):

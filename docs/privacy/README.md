@@ -108,12 +108,14 @@ Sign-in attempts (10 a minute) and registrations (10 an hour) are counted per ne
 | `python -m app.cli download-embedding-model`, once | Requests for the model's files: BAAI/bge-small-en-v1.5, at a pinned revision. No documents or questions | Hugging Face |
 | `python -m app.cli download-reranker-model`, once, only for `RETRIEVAL_MODE=hybrid_rerank` | Requests for the reranker's files: cross-encoder/ms-marco-MiniLM-L6-v2, at a pinned revision. No documents or questions | Hugging Face |
 | Each question, with `LLM_PROVIDER=ollama` | The question and the passages found for it, labeled S1, S2, and so on. No document names, IDs, or account details | The Ollama server at `OLLAMA_BASE_URL` |
+| Each question, with `LLM_PROVIDER=openai_compatible` | The same. If `LLM_BASE_URL` isn't on this computer, this leaves it, over https, with the API key in a header | The provider at `LLM_BASE_URL` |
 
-- **Nothing else.** The API loads the embedding model, and the reranker, from local files only, with Hugging Face's offline mode and telemetry turned off. The reranker reads the question and its passages inside the API's process. The code has no hosted model provider: `LLM_PROVIDER` is `ollama` or `none`.
+- **Nothing else.** The API loads the embedding model, and the reranker, from local files only, with Hugging Face's offline mode and telemetry turned off. The reranker reads the question and its passages inside the API's process. `LLM_PROVIDER` is `ollama` by default; `none` sends nothing.
+- **A hosted provider.** Before using one, read its terms: what it logs, whether it trains on requests, how long it keeps them, and where. This app can't see or change that, and no provider has been chosen or reviewed. Send it only text you are allowed to share with it. The web app tells every signed-in user, above the question box, when questions go to a hosted provider, and each answer records which provider wrote it. Token counts the provider reports are kept as daily totals, with no text or account.
 - **Ollama.** By default it runs on your own computer, at `http://127.0.0.1:11434`. What Ollama logs or keeps is up to Ollama and its settings, not this app. If `OLLAMA_BASE_URL` names another computer, prompts travel there, unencrypted unless the address starts with `https://`.
 - **Setting up.** Installing dependencies (`uv sync`, `npm ci`) and pulling the Ollama model contact their registries. That is part of setting up, not of running the app.
 - **CI.** The project's CI runs on GitHub with synthetic test data only.
-- **Later.** If a hosted model provider or a hosted demo is ever added, this page must first say what is sent where, and how long it is kept there (spec §12).
+- **Later.** A hosted demo isn't planned. If one is ever added, this page must first say what is sent where, and how long it is kept there (spec §12).
 
 ## Network exposure
 

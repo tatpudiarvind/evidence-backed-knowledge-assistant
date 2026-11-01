@@ -134,6 +134,7 @@ class AnswerOut(BaseModel):
     abstention_reason: AbstentionReason | None
     # The model that was asked, if one was; a search-only answer names it if it didn't reply.
     model_name: str | None
+    model_provider: str | None = None
     citations: list[CitationOut]
 
 
@@ -149,6 +150,14 @@ class QuestionOut(BaseModel):
 
 class QuestionList(BaseModel):
     items: list[QuestionOut]
+
+
+class ModelInfoOut(BaseModel):
+    # None when no language model is configured: answers are then the matching passages.
+    provider: str | None
+    model_name: str | None
+    # True when questions and passages are sent to a provider outside this machine.
+    sends_text_off_device: bool
 
 
 class ErrorField(BaseModel):

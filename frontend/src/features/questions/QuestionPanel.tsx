@@ -3,9 +3,11 @@ import { type FormEvent, type KeyboardEvent, useEffect, useId, useRef, useState 
 import { isUnauthenticated } from "../../api/client";
 import {
   MAX_QUESTION_LENGTH,
+  type ModelInfo,
   QUESTION_RETENTION_DAYS,
   type QuestionRecord,
   askQuestion,
+  getModelInfo,
   listQuestions,
 } from "../../api/questions";
 import type { Workspace } from "../../api/workspaces";
@@ -78,6 +80,7 @@ export default function QuestionPanel({
   const [attempt, setAttempt] = useState(0);
   const [showAll, setShowAll] = useState(false);
   const [announcement, setAnnouncement] = useState("");
+  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null);
   const id = useId();
   const listRef = useRef<HTMLUListElement>(null);
   const askAbortRef = useRef<AbortController | null>(null);
@@ -92,6 +95,15 @@ export default function QuestionPanel({
 
   // A question still being answered when the panel closes is abandoned.
   useEffect(() => () => askAbortRef.current?.abort(), []);
+
+  // A failed lookup shows no notice; asking a question would fail the same way.
+  useEffect(() => {
+    const controller = new AbortController();
+    getModelInfo(controller.signal)
+      .then(setModelInfo)
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -206,6 +218,13 @@ export default function QuestionPanel({
         Answers use only this workspace's Ready documents and cite them. If the documents don't
         cover a question, you'll be told instead of getting a guess.
       </p>
+      {modelInfo?.sendsTextOffDevice && (
+        <p className="hosted-notice" role="note">
+          <strong>Sent to a hosted provider.</strong> Each question, and the passages found for
+          it, is sent to an outside service ({modelInfo.modelName ?? "a hosted model"}) to write
+          the answer. Don't ask about anything you aren't allowed to share with it.
+        </p>
+      )}
       <form className="question-form" onSubmit={handleSubmit}>
         <textarea
           className="text-input question-input"

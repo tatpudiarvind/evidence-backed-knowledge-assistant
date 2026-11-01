@@ -27,9 +27,16 @@ from app.domain.questions import (
     QuestionRecord,
 )
 from app.providers.embeddings import EmbeddingProvider, EmbeddingUnavailableError, check_vectors
-from app.providers.llm import LanguageModel, LanguageModelUnavailableError
+from app.providers.llm import (
+    Generation,
+    LanguageModel,
+    LanguageModelUnavailableError,
+    provider_of,
+    sends_text_off_device,
+)
 from app.providers.rerankers import Reranker
 from app.repositories import documents as document_repository
+from app.repositories import llm_usage
 from app.repositories import questions as question_repository
 from app.services.retrieval import retrieve
 from app.services.workspaces import require_workspace
@@ -72,7 +79,15 @@ def ask_question(
         reranker=reranker,
         metrics=metrics,
     )
-    answer = _answer(text, retrieved.evidence, retrieved.has_documents, settings, language_model)
+    answer = _answer(
+        session,
+        text,
+        retrieved.evidence,
+        retrieved.has_documents,
+        settings,
+        language_model,
+        metrics,
+    )
 
     require_workspace(session, user, workspace_id)
     cited = {citation.passage.document_id for citation in answer.citations}
@@ -115,24 +130,38 @@ def _embed(embeddings: EmbeddingProvider, text: str) -> list[float]:
 
 
 def _answer(
+    session: Session,
     question: str,
     evidence: Sequence[Passage],
     has_documents: bool,
     settings: Settings,
     language_model: LanguageModel | None,
+    metrics: Metrics | None,
 ) -> AnswerRecord:
     if not has_documents:
         return _declined(AbstentionReason.NO_INDEXED_DOCUMENTS)
     if not evidence:
         return _declined(AbstentionReason.WEAK_EVIDENCE)
     if language_model is None:
-        return _passages_only(evidence, None)
+        return _passages_only(evidence, None, None)
+    provider = provider_of(language_model)
+    hosted = sends_text_off_device(language_model)
+    if hosted and not llm_usage.reserve_call(session, settings.llm_daily_call_limit):
+        # Nothing is sent: the day's limit on calls to the provider is used up.
+        logger.warning(
+            "The daily limit of %d hosted model calls is reached", settings.llm_daily_call_limit
+        )
+        _count_call(metrics, provider, "limit_reached")
+        return _passages_only(evidence, language_model.name, provider)
     prompt = build_prompt(question, evidence, settings.answer_context_characters)
     try:
         generation = language_model.generate(prompt.messages)
     except LanguageModelUnavailableError:
+        _count_call(metrics, provider, "unavailable")
         # The matching passages are still worth showing.
-        return _passages_only(evidence, language_model.name)
+        return _passages_only(evidence, language_model.name, provider)
+    _count_call(metrics, provider, "ok")
+    _record_tokens(session, metrics, hosted, generation)
     checked = check_answer(generation.text, prompt.sources)
     return AnswerRecord(
         AnswerMode.GENERATED,
@@ -140,15 +169,37 @@ def _answer(
         checked.abstention_reason,
         generation.model_name,
         _numbered(checked.cited),
+        provider,
     )
+
+
+def _count_call(metrics: Metrics | None, provider: str, outcome: str) -> None:
+    if metrics is not None:
+        metrics.count_llm_call(provider, outcome)
+
+
+def _record_tokens(
+    session: Session, metrics: Metrics | None, hosted: bool, generation: Generation
+) -> None:
+    prompt, completion = generation.prompt_tokens, generation.completion_tokens
+    if prompt is None or completion is None:
+        return
+    if metrics is not None:
+        metrics.count_llm_tokens(prompt, completion)
+    if hosted:
+        llm_usage.add_tokens(session, prompt, completion)
 
 
 def _declined(reason: AbstentionReason) -> AnswerRecord:
     return AnswerRecord(AnswerMode.SEARCH_ONLY, None, reason, None, ())
 
 
-def _passages_only(evidence: Sequence[Passage], model_name: str | None) -> AnswerRecord:
-    return AnswerRecord(AnswerMode.SEARCH_ONLY, None, None, model_name, _numbered(evidence))
+def _passages_only(
+    evidence: Sequence[Passage], model_name: str | None, provider: str | None
+) -> AnswerRecord:
+    return AnswerRecord(
+        AnswerMode.SEARCH_ONLY, None, None, model_name, _numbered(evidence), provider
+    )
 
 
 def _numbered(passages: Sequence[Passage]) -> tuple[CitationRecord, ...]:

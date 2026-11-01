@@ -1,8 +1,10 @@
+import ipaddress
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.domain.retrieval import RetrievalMode
@@ -18,6 +20,16 @@ MAX_ANSWER_TOKENS = 768
 _PROMPT_RESERVED_TOKENS = MAX_ANSWER_TOKENS + 1024
 # A cautious estimate for passage text; English averages about 4 characters per token.
 _CHARACTERS_PER_TOKEN = 3
+
+
+def is_loopback_host(hostname: str) -> bool:
+    """Whether a host name is this computer: `localhost` or a loopback address."""
+    if hostname.lower().rstrip(".") == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
 
 
 class Settings(BaseSettings):
@@ -83,7 +95,20 @@ class Settings(BaseSettings):
     # Answers (Phase 4). With "ollama", a local Ollama server writes answers from the passages
     # found for each question. With "none", or while that server doesn't reply, answers list
     # the passages instead.
-    llm_provider: Literal["ollama", "none"] = "ollama"
+    # "openai_compatible" (Phase 9) uses any server that speaks the OpenAI chat API, set by
+    # LLM_BASE_URL, LLM_MODEL, and LLM_API_KEY. A server that isn't on this computer is a hosted
+    # provider: it receives the question and passages, so it's off unless chosen (D-84).
+    llm_provider: Literal["ollama", "openai_compatible", "none"] = "ollama"
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    llm_api_key: SecretStr | None = None
+    # Vendors differ on the name of the parameter that limits a reply's length.
+    llm_token_limit_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
+    # Retries after a 429, a 5xx, or a lost connection; waits grow from one second.
+    llm_max_retries: int = Field(default=2, ge=0, le=5)
+    # Calls to a hosted provider per UTC day, counted in PostgreSQL across all API processes.
+    # Past it, answers list the passages instead of calling the provider.
+    llm_daily_call_limit: int = Field(default=200, ge=1, le=1_000_000)
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3:4b-instruct-2507-q4_K_M"
     # A local model on an ordinary computer can take a minute or more to answer.
@@ -141,6 +166,37 @@ class Settings(BaseSettings):
         if not url.startswith(("http://", "https://")):
             raise ValueError("OLLAMA_BASE_URL must be an http:// or https:// URL")
         return url.rstrip("/")
+
+    @field_validator("llm_base_url", "llm_model", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @model_validator(mode="after")
+    def _check_openai_compatible(self) -> Self:
+        if self.llm_provider != "openai_compatible":
+            return self
+        if not self.llm_base_url or not self.llm_model:
+            raise ValueError("LLM_BASE_URL and LLM_MODEL are required for openai_compatible")
+        parts = urlsplit(self.llm_base_url)
+        if parts.scheme not in ("http", "https") or not parts.hostname or parts.username:
+            raise ValueError("LLM_BASE_URL must be an http:// or https:// URL without a login")
+        self.llm_base_url = self.llm_base_url.rstrip("/")
+        if not is_loopback_host(parts.hostname):
+            # A key or a question must not cross the network unencrypted, or without a key.
+            if parts.scheme != "https":
+                raise ValueError("LLM_BASE_URL must use https:// unless it's on this computer")
+            if self.llm_api_key is None or not self.llm_api_key.get_secret_value():
+                raise ValueError("LLM_API_KEY is required for a server that isn't on this computer")
+        return self
+
+    @property
+    def llm_is_hosted(self) -> bool:
+        """Whether answers are written by a server that isn't on this computer."""
+        if self.llm_provider != "openai_compatible" or not self.llm_base_url:
+            return False
+        hostname = urlsplit(self.llm_base_url).hostname
+        return hostname is None or not is_loopback_host(hostname)
 
     @model_validator(mode="after")
     def _check_chunk_overlap(self) -> Self:

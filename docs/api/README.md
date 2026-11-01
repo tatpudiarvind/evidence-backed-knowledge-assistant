@@ -206,6 +206,7 @@ The API answers `201 Created` with the question and its answer. This example is 
     "abstained": false,
     "abstention_reason": null,
     "model_name": null,
+    "model_provider": null,
     "citations": [
       {
         "number": 1,
@@ -235,7 +236,19 @@ Only passages with a cosine similarity to the question of at least 0.5 (`RETRIEV
 | `search_only` | `weak_evidence` | `null` | None | No passage was similar enough to count as evidence |
 | `search_only` | `no_indexed_documents` | `null` | None | The workspace had no `ready` documents |
 
-`abstained` is `true` exactly when there's an `abstention_reason`. A generated answer always names its `model_name`.
+`abstained` is `true` exactly when there's an `abstention_reason`. A generated answer always names its `model_name`. `model_provider` says which kind of provider that model belongs to: `ollama` or `openai_compatible` (`other` for a stand-in in tests), or `null` when no model was asked, and for answers written before Phase 9 that didn't name a model. Answers written before Phase 9 by a model were recorded as `ollama`.
+
+When `LLM_PROVIDER=openai_compatible` and the host isn't this computer, each call counts against `LLM_DAILY_CALL_LIMIT` per UTC day. Past it, nothing is sent, and the answer is `search_only` with the passages and the model's name, as when the model doesn't reply.
+
+### `GET /api/v1/model`
+
+For a signed-in user: which model writes answers, and whether the question and passages leave this computer. The web app reads it to warn the user before they ask.
+
+```json
+{ "provider": "openai_compatible", "model_name": "…", "sends_text_off_device": true }
+```
+
+With no language model, `provider` and `model_name` are `null` and `sends_text_off_device` is `false`. Without a session, the reply is 401.
 
 Each citation has:
 

@@ -17,11 +17,13 @@ from app.api.deps import (
 from app.api.v1.schemas import (
     AnswerOut,
     CitationOut,
+    ModelInfoOut,
     QuestionCreateRequest,
     QuestionList,
     QuestionOut,
 )
 from app.domain.questions import QuestionRecord
+from app.providers.llm import provider_of, sends_text_off_device
 from app.services import questions as question_service
 
 router = APIRouter(tags=["questions"])
@@ -69,6 +71,24 @@ def ask_question(
 
 
 @router.get(
+    "/model",
+    summary="Say which language model writes answers, and whether it is hosted",
+    description=(
+        "Tells the signed-in user, before they ask, whether the text of their questions and "
+        "the passages used to answer them would leave this machine for a hosted provider."
+    ),
+)
+def get_model(user: CurrentUser, language_model: LanguageModelDep) -> ModelInfoOut:
+    if language_model is None:
+        return ModelInfoOut(provider=None, model_name=None, sends_text_off_device=False)
+    return ModelInfoOut(
+        provider=provider_of(language_model),
+        model_name=language_model.name,
+        sends_text_off_device=sends_text_off_device(language_model),
+    )
+
+
+@router.get(
     "/workspaces/{workspace_id}/questions",
     summary="List your recent questions in a workspace",
     description="Your questions from the last three days, newest first, up to 50.",
@@ -92,6 +112,7 @@ def _question_out(record: QuestionRecord) -> QuestionOut:
             abstained=answer.abstained,
             abstention_reason=answer.abstention_reason,
             model_name=answer.model_name,
+            model_provider=answer.model_provider,
             citations=[
                 CitationOut(
                     number=citation.number,

@@ -54,7 +54,16 @@ export type Answer = {
   abstentionReason: AbstentionReason | null;
   /** The model that was asked, if one was. */
   modelName: string | null;
+  /** The provider of that model: "ollama" or "openai_compatible". */
+  modelProvider: string | null;
   citations: Citation[];
+};
+
+/** Which model writes answers, and whether the question and passages leave this machine. */
+export type ModelInfo = {
+  provider: string | null;
+  modelName: string | null;
+  sendsTextOffDevice: boolean;
 };
 
 export type QuestionRecord = {
@@ -89,6 +98,7 @@ function parseAnswer(value: unknown): Answer {
     abstained: readBoolean(source, "abstained"),
     abstentionReason: readOptionalEnum(source, "abstention_reason", ABSTENTION_REASONS),
     modelName: readOptionalString(source, "model_name"),
+    modelProvider: readOptionalString(source, "model_provider"),
     citations: readArray(source, "citations").map(parseCitation),
   };
 }
@@ -107,6 +117,20 @@ function parseQuestion(value: unknown): QuestionRecord {
 
 function parseQuestionList(body: unknown): QuestionRecord[] {
   return readArray(asObject(body), "items").map(parseQuestion);
+}
+
+function parseModelInfo(body: unknown): ModelInfo {
+  const source = asObject(body);
+  return {
+    provider: readOptionalString(source, "provider"),
+    modelName: readOptionalString(source, "model_name"),
+    sendsTextOffDevice: readBoolean(source, "sends_text_off_device"),
+  };
+}
+
+/** Whether a question would be sent to a hosted provider; read before the first one is asked. */
+export function getModelInfo(signal?: AbortSignal): Promise<ModelInfo> {
+  return requestJson("/api/v1/model", parseModelInfo, { signal });
 }
 
 function questionsPath(workspaceId: string): string {

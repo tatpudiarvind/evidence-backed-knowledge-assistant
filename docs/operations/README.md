@@ -211,6 +211,10 @@ By default the stack runs without one: `COMPOSE_LLM_PROVIDER` isn't set, so `LLM
 
 **Not tried yet** (risk R-25). Ollama listens on the host's `127.0.0.1` by default, and whether a container can reach it there depends on how Docker runs on the computer. Don't make Ollama listen on every network interface to get around that: it has no authentication, so anything that can reach it can use it (R-17).
 
+### A hosted provider
+
+`LLM_PROVIDER=openai_compatible` uses a server that speaks the OpenAI chat completions API. Set `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY` (in `.env`, which is never committed), and add `COMPOSE_LLM_PROVIDER=openai_compatible`. The same settings are in `.env.example`. Questions and their passages then leave the computer, so read the [privacy page](../privacy/README.md#what-leaves-your-computer) first. No provider has been chosen, and none has been called in this project. Watch `knowledge_assistant_llm_calls` and `knowledge_assistant_llm_tokens` in the metrics, and set a spending alert at the provider: the daily call limit (`LLM_DAILY_CALL_LIMIT`, 200) caps calls, not cost. To try the adapter with no key and nothing leaving the computer, point it at Ollama's own endpoint, `http://127.0.0.1:11434/v1`.
+
 If the model can't be reached, or doesn't answer within `LLM_TIMEOUT_SECONDS` (120 by default), the answer falls back to the closest passages, under "qwen3:4b-instruct-2507-q4_K_M didn't reply". Without a GPU that suits it, the model can be much slower. To give it more time, raise `LLM_TIMEOUT_SECONDS`, and nginx's `proxy_read_timeout` too if the new value gets near 180 seconds.
 
 ## Backing up and restoring

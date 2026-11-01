@@ -248,6 +248,8 @@ Not in this phase: Redis or another message broker, answering questions through 
 
 Settles PD-06. Tasks: [Phase 9 in the task tracker](../tracker/01-task-tracker.md#phase-9--a-hosted-language-model).
 
+**Status: built and tested against a fake server; no hosted provider has been called.** The adapter, the daily limit, the provider record on answers, the web notice, and the tests are done. Choosing a vendor, estimating its cost, and a run of the evaluation with it wait for the owner's approval. As built: the adapter uses `urllib`, not a vendor SDK; past the daily limit, the answer lists the passages and names the model as one that didn't reply, with a log line and a metric rather than a separate note; and the web app reads `GET /api/v1/model` to decide whether to show the notice.
+
 ### Why
 
 The local model, through Ollama, stays the default. A hosted model would let the app write answers on a computer that can't run a local one, and it would test whether the `LanguageModel` interface really keeps the provider replaceable. It also brings two things a local model doesn't: questions and passages leave the computer, and each answer costs money. This phase plans for both.
@@ -268,7 +270,9 @@ The local model, through Ollama, stays the default. A hosted model would let the
 | `LLM_BASE_URL` | The provider's API address | Not set; required with `openai_compatible` | Must use HTTPS unless it points at this computer |
 | `LLM_MODEL` | The model's name at the provider | Not set; required with `openai_compatible` | Chosen at P9-01 |
 | `LLM_API_KEY` | The provider's key | Not set | A secret: never logged, returned, or committed |
-| `LLM_DAILY_CALL_LIMIT` | Hosted calls allowed per day | Set at P9-01 | Counted in PostgreSQL |
+| `LLM_TOKEN_LIMIT_PARAMETER` | `max_tokens` or `max_completion_tokens` | `max_tokens` | Providers differ |
+| `LLM_MAX_RETRIES` | Tries again after a 429, 5xx, or lost connection | 2 (0 to 5) | Waits as `Retry-After` says, up to 30 s |
+| `LLM_DAILY_CALL_LIMIT` | Hosted calls allowed per UTC day | 200 | Counted in PostgreSQL |
 
 ```mermaid
 flowchart TD
