@@ -128,7 +128,7 @@ sequenceDiagram
     DS->>DB: Insert document and job, send NOTIFY, then commit
     DB-->>Worker: Notification after commit (or 5-second poll)
     API-->>UI: 202 Accepted + document ID + queued state
-    Worker->>DB: Claim due job with SKIP LOCKED; lease and mark processing
+    Worker->>DB: Claim due job with SKIP LOCKED, then lease and mark processing
     Worker->>Ing: Index the claimed document
     Ing->>FS: Read the stored file into memory
     Ing->>Parser: Start isolated child with path, limits, and minimal environment
