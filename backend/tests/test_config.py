@@ -57,6 +57,9 @@ def test_explicit_cors_origins_are_accepted() -> None:
         {"retrieval_top_k": 21},
         {"retrieval_min_similarity": -0.01},
         {"retrieval_min_similarity": 1.01},
+        {"retrieval_candidates": 101},
+        {"rrf_k": 0},
+        {"rrf_k": 1001},
         {"answer_context_characters": 999},
         {"answer_context_characters": 50_001},
         {"sign_in_attempts_per_minute": 0},
@@ -105,12 +108,42 @@ def test_chunk_overlap_is_at_most_a_quarter_of_the_chunk_size() -> None:
         make_settings(chunk_size_characters=1000, chunk_overlap_characters=251)
 
 
+@pytest.mark.parametrize("setting", ["embedding_model_revision", "reranker_model_revision"])
 @pytest.mark.parametrize(
     "revision", ["main", "5c38ec7", "5C38EC7C405EC4B44B94CC5A9BB96E735B38267A"]
 )
-def test_the_model_revision_must_be_a_full_commit_hash(revision: str) -> None:
+def test_the_model_revision_must_be_a_full_commit_hash(setting: str, revision: str) -> None:
     with pytest.raises(ValidationError):
-        make_settings(embedding_model_revision=revision)
+        make_settings(**{setting: revision})
+
+
+def test_search_is_by_meaning_by_default() -> None:
+    fields = config.Settings.model_fields
+
+    assert fields["retrieval_mode"].default == "vector"
+    assert (fields["retrieval_candidates"].default, fields["rrf_k"].default) == (20, 60)
+    assert fields["reranker_model_name"].default == "cross-encoder/ms-marco-MiniLM-L6-v2"
+    assert fields["reranker_model_revision"].default == "233902d25c440f23af6f7d6e94d2946bac0bee0a"
+
+
+@pytest.mark.parametrize("mode", ["hybrid", "hybrid_rerank"])
+def test_the_hybrid_modes_are_accepted(mode: str) -> None:
+    assert make_settings(retrieval_mode=mode).retrieval_mode == mode
+
+
+@pytest.mark.parametrize("mode", ["bm25", "", "HYBRID", "hybrid-rerank"])
+def test_only_known_retrieval_modes_are_accepted(mode: str) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(retrieval_mode=mode)
+
+
+@pytest.mark.parametrize("mode", ["vector", "hybrid"])
+def test_each_search_finds_at_least_as_many_passages_as_are_kept(mode: str) -> None:
+    settings = make_settings(retrieval_mode=mode, retrieval_top_k=4, retrieval_candidates=4)
+    assert settings.retrieval_candidates == 4
+
+    with pytest.raises(ValidationError, match="RETRIEVAL_CANDIDATES"):
+        make_settings(retrieval_mode=mode, retrieval_top_k=4, retrieval_candidates=3)
 
 
 def test_answers_come_from_local_ollama_by_default() -> None:

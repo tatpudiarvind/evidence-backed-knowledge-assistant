@@ -1,9 +1,13 @@
-"""Running the evaluation (P5-02).
+"""Running the evaluation (P5-02, Phase 7).
 
 The corpus is uploaded to a new workspace and indexed the way the app indexes uploads. Then each
 question is searched for three ways, to see how PostgreSQL reads the chunks and whether the
 approximate HNSW index finds what an exact scan finds, and is asked the way the API asks it.
 With a language model, the model's prompt and raw reply are kept too, for review.
+
+In `vector` mode, the passages judged are the 10 closest, before the minimum similarity. In the
+hybrid modes, they're the first 10 that the app ranks, after the minimum similarity, with each
+search's rank, the fused score, and the reranker's score.
 """
 
 import hashlib
@@ -38,6 +42,7 @@ from app.evaluation.scoring import (
     AnswerOutcome,
     AnswerScore,
     FoundPassage,
+    HybridRanking,
     IndexComparison,
     Json,
     Retrieval,
@@ -46,12 +51,14 @@ from app.evaluation.scoring import (
 )
 from app.providers.embeddings import EmbeddingProvider, EmbeddingUnavailableError
 from app.providers.llm import Generation, LanguageModel, LanguageModelUnavailableError
+from app.providers.rerankers import Reranker, RerankerUnavailableError
 from app.providers.storage import LocalDocumentStorage
 from app.repositories import chunks as chunk_repository
 from app.repositories import users as user_repository
 from app.services.documents import store_upload
 from app.services.ingestion import DocumentIndexer
 from app.services.questions import ask_question
+from app.services.retrieval import RetrievalResult, retrieve
 from app.services.workspaces import create_workspace
 
 # Planner settings for each way of searching, on top of the app's own: the app's query as the
@@ -95,6 +102,20 @@ class IndexedDocument:
 
 
 @dataclass(frozen=True)
+class HybridDetails:
+    """What hybrid search did for one question."""
+
+    # How many different passages the two searches returned, before the minimum similarity.
+    candidates: int
+    # How many passages the keyword search returned, and how many of them the minimum
+    # similarity dropped.
+    keyword_matches: int
+    keyword_dropped: int
+    # In `hybrid_rerank` mode: the reranker failed, so the fused order was kept.
+    rerank_failed: bool | None
+
+
+@dataclass(frozen=True)
 class QuestionResult:
     retrieval: Retrieval
     comparison: IndexComparison
@@ -104,6 +125,8 @@ class QuestionResult:
     evidence_matches: bool
     # How long the model took to reply, if it was asked.
     model_seconds: float | None
+    # In the hybrid modes.
+    hybrid: HybridDetails | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +149,7 @@ class _Context:
     settings: Settings
     embeddings: EmbeddingProvider
     language_model: LanguageModel | None
+    reranker: Reranker | None
     user: User
     workspace_id: uuid.UUID
 
@@ -143,23 +167,25 @@ def run_evaluation(
     *,
     embeddings: EmbeddingProvider,
     language_model: LanguageModel | None,
+    reranker: Reranker | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> EvaluationRun:
     """Index the corpus in a new workspace, then ask every question.
 
     Use a throwaway database: the evaluation adds a user, a workspace, the documents, and every
-    question and answer to it. Uploaded files go to `settings.storage_dir`.
+    question and answer to it. Uploaded files go to `settings.storage_dir`. In `hybrid_rerank`
+    mode, give the reranker to use.
     """
     notify = progress or (lambda message: None)
     started_at = datetime.now(UTC)
     started = time.perf_counter()
-    _warm_up(embeddings, language_model)
+    _warm_up(settings, embeddings, language_model, reranker)
     engine = create_database_engine(settings)
     try:
         session_factory = create_session_factory(engine)
         user, workspace_id = _create_workspace(session_factory)
         context = _Context(
-            session_factory, settings, embeddings, language_model, user, workspace_id
+            session_factory, settings, embeddings, language_model, reranker, user, workspace_id
         )
         indexed = _index_corpus(context, documents)
         notify(
@@ -241,7 +267,12 @@ class _RecordingModel:
         return generation
 
 
-def _warm_up(embeddings: EmbeddingProvider, language_model: LanguageModel | None) -> None:
+def _warm_up(
+    settings: Settings,
+    embeddings: EmbeddingProvider,
+    language_model: LanguageModel | None,
+    reranker: Reranker | None,
+) -> None:
     """Load the models before anything is timed, and stop early if one isn't available."""
     try:
         embeddings.embed_query("A warm-up question?")
@@ -250,6 +281,17 @@ def _warm_up(embeddings: EmbeddingProvider, language_model: LanguageModel | None
             "The embedding model isn't available. Download it with "
             "`python -m app.cli download-embedding-model`."
         ) from None
+    if settings.retrieval_mode == "hybrid_rerank":
+        # Without it, every question would quietly keep the fused order.
+        try:
+            if reranker is None:
+                raise RerankerUnavailableError("No reranker was given")
+            reranker.score("A warm-up question?", ["A warm-up passage."])
+        except RerankerUnavailableError:
+            raise EvaluationError(
+                "The reranker isn't available. Download it with "
+                "`python -m app.cli download-reranker-model`."
+            ) from None
     if language_model is None:
         return
     try:
@@ -338,7 +380,6 @@ def _ask(context: _Context, question: EvalQuestion) -> QuestionResult:
     asked = clean_question(question.question)
     vector = context.embeddings.embed_query(asked)
     searches = {mode: _search(context, vector, mode) for mode in SEARCH_MODES}
-    found = searches["default"][0]
     ids = {
         mode: tuple(passage.chunk_id for passage in passages)
         for mode, (passages, _) in searches.items()
@@ -349,6 +390,33 @@ def _ask(context: _Context, question: EvalQuestion) -> QuestionResult:
         ids["exact"],
         {mode: plan for mode, (_, plan) in searches.items()},
     )
+    hybrid: HybridDetails | None = None
+    if settings.retrieval_mode == "vector":
+        closest = searches["default"][0]
+        found = [FoundPassage.of(passage) for passage in closest]
+        evidence = [
+            passage.chunk_id
+            for passage in closest[: settings.retrieval_top_k]
+            if passage.similarity >= settings.retrieval_min_similarity
+        ]
+    else:
+        retrieved = _retrieve(context, asked, vector)
+        found = [
+            FoundPassage.of(
+                entry.passage,
+                HybridRanking(
+                    entry.vector_rank, entry.keyword_rank, entry.fused_score, entry.rerank_score
+                ),
+            )
+            for entry in retrieved.ranked[:SEARCH_LIMIT]
+        ]
+        evidence = [passage.chunk_id for passage in retrieved.evidence]
+        hybrid = HybridDetails(
+            retrieved.candidates,
+            retrieved.keyword_matches,
+            retrieved.keyword_dropped,
+            retrieved.rerank_failed if settings.retrieval_mode == "hybrid_rerank" else None,
+        )
 
     model = _RecordingModel(context.language_model) if context.language_model else None
     started = time.perf_counter()
@@ -362,17 +430,13 @@ def _ask(context: _Context, question: EvalQuestion) -> QuestionResult:
                 settings=settings,
                 embeddings=context.embeddings,
                 language_model=model,
+                reranker=context.reranker,
             )
     except AppError as error:
         raise EvaluationError(f"{question.id} couldn't be asked: {error.message}") from None
     seconds = time.perf_counter() - started
 
     answer = record.answer
-    evidence = [
-        passage.chunk_id
-        for passage in found[: settings.retrieval_top_k]
-        if passage.similarity >= settings.retrieval_min_similarity
-    ]
     cited = [citation.passage.chunk_id for citation in answer.citations]
     if answer.mode is AnswerMode.GENERATED:
         evidence_matches = set(cited) <= set(evidence)
@@ -382,12 +446,27 @@ def _ask(context: _Context, question: EvalQuestion) -> QuestionResult:
         answer, model.prompt if model else None, model.reply if model else None, seconds
     )
     return QuestionResult(
-        Retrieval(question, judge(question, (FoundPassage.of(passage) for passage in found))),
+        Retrieval(question, judge(question, found)),
         comparison,
         score_answer(question, outcome),
         evidence_matches,
         model.seconds if model else None,
+        hybrid,
     )
+
+
+def _retrieve(context: _Context, question: str, vector: Sequence[float]) -> RetrievalResult:
+    """The question's passages as the app ranks them in a hybrid mode."""
+    with context.session_factory() as session:
+        return retrieve(
+            session,
+            context.workspace_id,
+            context.user.id,
+            question,
+            vector,
+            settings=context.settings,
+            reranker=context.reranker,
+        )
 
 
 def _search(context: _Context, vector: Sequence[float], mode: str) -> tuple[list[Passage], str]:

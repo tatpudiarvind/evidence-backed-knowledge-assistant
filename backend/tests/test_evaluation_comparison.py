@@ -101,6 +101,84 @@ def test_results_with_and_without_a_model_differ(committed: dict[str, Any]) -> N
     assert f"config.language_model: null != {model}" in differences
 
 
+HYBRID_CONFIG = (
+    "retrieval_mode",
+    "retrieval_candidates",
+    "rrf_k",
+    "reranker_model",
+    "reranker_model_revision",
+)
+
+
+def test_results_from_before_phase_7_searched_by_meaning(report: dict[str, Any]) -> None:
+    for key in HYBRID_CONFIG:
+        report["config"].pop(key, None)
+    report.pop("hybrid_search", None)
+
+    assert summary_lines(report)[1] == "Search mode: vector (by meaning)."
+
+
+def test_hybrid_results_say_how_they_searched(
+    committed: dict[str, Any], report: dict[str, Any]
+) -> None:
+    report["config"] |= {
+        "retrieval_mode": "hybrid_rerank",
+        "retrieval_candidates": 20,
+        "rrf_k": 60,
+        "reranker_model": "synthetic-reranker",
+        "reranker_model_revision": "0" * 40,
+    }
+    report["recommendation"] = None
+    report["threshold_sweep"] = None
+    report["hybrid_search"] = {
+        "questions": 66,
+        "with_keyword_matches": {"count": 60, "of": 66, "share": 0.9091},
+        "keyword_matches": 900,
+        "keyword_dropped": 300,
+        "evidence_from_keywords_only": {"count": 5, "of": 200, "share": 0.025},
+        "rerank_failed": {"count": 1, "of": 66, "share": 0.0152},
+    }
+
+    lines = summary_lines(report)
+
+    assert lines[1] == (
+        "Search mode: hybrid_rerank (by meaning and by keywords, 20 candidates each, fused with "
+        "RRF k 60, reranked by synthetic-reranker)."
+    )
+    assert lines[2].endswith(", over the passages above the minimum similarity:")
+    assert (
+        "Keyword search: passages for 60/66 questions, 900 in all, 300 of them below the minimum "
+        "similarity; evidence found only by keywords 5/200"
+    ) in lines
+    assert "Reranker failed: 1/66" in lines
+    # The recommended settings come from ranking by meaning alone.
+    assert not any(line.startswith("The rules pick") for line in lines)
+    assert any(
+        line.startswith("config.retrieval_mode: ") and line.endswith(' != "hybrid_rerank"')
+        for line in compare_reports(committed, report)
+    )
+
+
+def test_hybrid_results_without_a_reranker_say_nothing_about_one(report: dict[str, Any]) -> None:
+    report["config"] |= {"retrieval_mode": "hybrid", "retrieval_candidates": 20, "rrf_k": 60}
+    report["recommendation"] = None
+    report["hybrid_search"] = {
+        "questions": 1,
+        "with_keyword_matches": {"count": 0, "of": 1, "share": 0.0},
+        "keyword_matches": 0,
+        "keyword_dropped": 0,
+        "evidence_from_keywords_only": {"count": 0, "of": 0, "share": None},
+        "rerank_failed": None,
+    }
+
+    lines = summary_lines(report)
+
+    assert lines[1] == (
+        "Search mode: hybrid (by meaning and by keywords, 20 candidates each, fused with RRF k 60)."
+    )
+    assert not any("rerank" in line.lower() for line in lines)
+
+
 @pytest.mark.parametrize(
     "content",
     [None, b'{"format_version": ', b"\xff\xfe"],

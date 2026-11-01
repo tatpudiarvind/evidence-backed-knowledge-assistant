@@ -1,4 +1,5 @@
-"""Metrics (Phase 5): counts of requests, answers, and indexed documents, for Prometheus.
+"""Metrics (Phase 5): counts of requests, answers, indexed documents, and reranker failures, for
+Prometheus.
 
 They're kept in the API process's memory and start again from zero when it restarts. The API
 serves them at `/metrics` only when METRICS_ENABLED is true. Labels hold methods, route
@@ -49,6 +50,11 @@ class Metrics:
             ("outcome",),
             registry=self.registry,
         )
+        self._reranker_failures = Counter(
+            "knowledge_assistant_reranker_failures",
+            "Questions whose candidates kept their fused order because the reranker failed.",
+            registry=self.registry,
+        )
 
     def count_request(self, method: str, route: str, status: int | None, seconds: float) -> None:
         """`status` is None for a request that got no response, as when its client left."""
@@ -61,6 +67,9 @@ class Metrics:
 
     def count_indexing(self, outcome: str) -> None:
         self._documents.labels(outcome).inc()
+
+    def count_reranker_failure(self) -> None:
+        self._reranker_failures.inc()
 
     def exposition(self, accept_header: str) -> tuple[bytes, str]:
         """The metrics in the format an Accept header asks for, with that format's media type.

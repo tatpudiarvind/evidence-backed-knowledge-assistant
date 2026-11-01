@@ -10,6 +10,7 @@ from app.api.deps import (
     EmbeddingsDep,
     LanguageModelDep,
     MetricsDep,
+    RerankerDep,
     SettingsDep,
     limit_questions,
 )
@@ -31,7 +32,8 @@ router = APIRouter(tags=["questions"])
     status_code=201,
     summary="Ask a question about a workspace's documents",
     description=(
-        "Finds the passages in the workspace's indexed documents closest to the question. With "
+        "Finds the passages in the workspace's indexed documents that best match the question, "
+        "by meaning, or by meaning and words, as RETRIEVAL_MODE sets. With "
         "a language model configured, the answer is written from those passages and cites them, "
         "or abstains when they don't answer the question; otherwise the passages are the "
         "answer. A local model can take a minute or more. Questions are kept for three days. "
@@ -48,6 +50,7 @@ def ask_question(
     settings: SettingsDep,
     embeddings: EmbeddingsDep,
     language_model: LanguageModelDep,
+    reranker: RerankerDep,
     metrics: MetricsDep,
 ) -> QuestionOut:
     record = question_service.ask_question(
@@ -58,6 +61,8 @@ def ask_question(
         settings=settings,
         embeddings=embeddings,
         language_model=language_model,
+        reranker=reranker,
+        metrics=metrics,
     )
     metrics.count_answer(record.answer)
     return _question_out(record)

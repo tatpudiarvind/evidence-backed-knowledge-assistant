@@ -29,6 +29,7 @@ from app.core.rate_limits import RateLimits
 from app.core.security import PasswordHashing
 from app.providers.embeddings import EmbeddingProvider, SentenceTransformerEmbeddings
 from app.providers.llm import LanguageModel, OllamaChatModel
+from app.providers.rerankers import CrossEncoderReranker, Reranker
 from app.providers.storage import LocalDocumentStorage
 from app.services.ingestion import DocumentIndexer
 from app.workers.ingestion import IngestionWorker
@@ -41,6 +42,7 @@ def create_app(
     passwords: PasswordHashing | None = None,
     embeddings: EmbeddingProvider | None = None,
     language_model: LanguageModel | None = None,
+    reranker: Reranker | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     engine = create_database_engine(settings)
@@ -56,6 +58,9 @@ def create_app(
     # Without a model, answers list the passages that match the question.
     if language_model is None and settings.llm_provider == "ollama":
         language_model = OllamaChatModel(settings)
+    # Only hybrid_rerank uses a reranker. Like the embedding model, it loads on first use.
+    if reranker is None and settings.retrieval_mode == "hybrid_rerank":
+        reranker = CrossEncoderReranker(settings)
     cleanup = QuestionCleanupWorker(session_factory)
 
     @asynccontextmanager
@@ -80,6 +85,7 @@ def create_app(
     app.state.passwords = passwords or PasswordHashing()
     app.state.embeddings = embeddings
     app.state.language_model = language_model
+    app.state.reranker = reranker
     app.state.ingestion_worker = worker
     app.state.question_cleanup = cleanup
     app.state.rate_limits = RateLimits(settings)

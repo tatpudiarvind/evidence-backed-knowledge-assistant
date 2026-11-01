@@ -16,6 +16,7 @@ from app.core.security import PasswordHashing
 from app.db.models import User
 from app.providers.embeddings import EmbeddingProvider
 from app.providers.llm import LanguageModel
+from app.providers.rerankers import Reranker
 from app.providers.storage import DocumentStorage
 from app.services import auth as auth_service
 from app.workers.ingestion import IngestionWorker
@@ -64,6 +65,12 @@ async def get_language_model(request: Request) -> LanguageModel | None:
     return language_model
 
 
+async def get_reranker(request: Request) -> Reranker | None:
+    """The cross-encoder of RETRIEVAL_MODE=hybrid_rerank, or None in the other modes."""
+    reranker: Reranker | None = request.app.state.reranker
+    return reranker
+
+
 async def get_metrics(request: Request) -> Metrics:
     metrics: Metrics = request.app.state.metrics
     return metrics
@@ -81,6 +88,7 @@ PasswordsDep = Annotated[PasswordHashing, Depends(get_passwords)]
 IngestionWorkerDep = Annotated[IngestionWorker, Depends(get_ingestion_worker)]
 EmbeddingsDep = Annotated[EmbeddingProvider, Depends(get_embeddings)]
 LanguageModelDep = Annotated[LanguageModel | None, Depends(get_language_model)]
+RerankerDep = Annotated[Reranker | None, Depends(get_reranker)]
 MetricsDep = Annotated[Metrics, Depends(get_metrics)]
 DbSession = Annotated[Session, Depends(get_db)]
 SessionToken = Annotated[str | None, Depends(session_cookie)]

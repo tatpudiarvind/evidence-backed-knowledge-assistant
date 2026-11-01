@@ -5,6 +5,7 @@
 #
 #   docker compose -f compose.prod.yaml up --build --detach --wait
 #   docker compose -f compose.prod.yaml run --rm backend python -m app.cli download-embedding-model
+#   (and download-reranker-model too, for RETRIEVAL_MODE=hybrid_rerank)
 #   Then open http://localhost:8080 (PROD_WEB_PORT).
 #   docker compose -f compose.prod.yaml down          # --volumes also deletes its data
 #
@@ -58,6 +59,9 @@ x-backend-environment: &backend-environment
   ANSWER_CONTEXT_CHARACTERS: ${ANSWER_CONTEXT_CHARACTERS:-6000}
   RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-4}
   RETRIEVAL_MIN_SIMILARITY: ${RETRIEVAL_MIN_SIMILARITY:-0.5}
+  RETRIEVAL_MODE: ${RETRIEVAL_MODE:-vector}
+  RETRIEVAL_CANDIDATES: ${RETRIEVAL_CANDIDATES:-20}
+  RRF_K: ${RRF_K:-60}
   QUESTION_CLEANUP_ENABLED: ${QUESTION_CLEANUP_ENABLED:-true}
   # Read by uvicorn, not the app. Only nginx can reach the API, and it replaces any forwarded
   # address the browser sends, so the address it passes on is trusted (the rate limits use it).

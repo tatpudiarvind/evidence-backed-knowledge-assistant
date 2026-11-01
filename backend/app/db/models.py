@@ -6,6 +6,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,
+    Computed,
     DateTime,
     ForeignKey,
     Index,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -122,6 +124,8 @@ class DocumentChunk(Base):
             postgresql_using="hnsw",
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
+        # Keyword search (Phase 7).
+        Index("ix_document_chunks_search_vector", "search_vector", postgresql_using="gin"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -135,6 +139,11 @@ class DocumentChunk(Base):
     section: Mapped[str | None] = mapped_column(String(MAX_SECTION_LENGTH))
     # Read back as a NumPy array.
     embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIMENSION))
+    # The text's English words, stemmed, for keyword search. PostgreSQL computes and stores it,
+    # so it can't fall out of step with the text. Loaded only when read, as nothing needs it.
+    search_vector: Mapped[Any] = mapped_column(
+        TSVECTOR, Computed("to_tsvector('english'::regconfig, text)", persisted=True), deferred=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

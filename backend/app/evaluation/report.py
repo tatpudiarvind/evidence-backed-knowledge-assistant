@@ -56,6 +56,9 @@ def build_report(
     environment = dict(run.environment)
     if model_details is not None:
         environment["language_model"] = model_details
+    mode = settings.retrieval_mode
+    hybrid = mode != "vector"
+    reranked = mode == "hybrid_rerank"
     return {
         "format_version": FORMAT_VERSION,
         "run": {
@@ -87,6 +90,11 @@ def build_report(
             "chunk_overlap_characters": settings.chunk_overlap_characters,
             "retrieval_top_k": settings.retrieval_top_k,
             "retrieval_min_similarity": settings.retrieval_min_similarity,
+            "retrieval_mode": mode,
+            "retrieval_candidates": settings.retrieval_candidates if hybrid else None,
+            "rrf_k": settings.rrf_k if hybrid else None,
+            "reranker_model": settings.reranker_model_name if reranked else None,
+            "reranker_model_revision": settings.reranker_model_revision if reranked else None,
             "answer_context_characters": settings.answer_context_characters,
             "language_model": run.language_model,
             "ollama_context_tokens": settings.ollama_context_tokens if run.language_model else None,
@@ -100,7 +108,12 @@ def build_report(
         "current_settings": evidence_outcome(
             retrievals, settings.retrieval_top_k, settings.retrieval_min_similarity
         ),
-        "recommendation": recommend_settings(retrievals, run.max_k),
+        # The hybrid modes drop passages below the minimum similarity before fusing the two
+        # rankings, so a threshold tried on their ranked passages isn't what the app would do.
+        "recommendation": None if hybrid else recommend_settings(retrievals, run.max_k),
+        "hybrid_search": (
+            _hybrid_summary(results, settings.retrieval_top_k, reranked) if hybrid else None
+        ),
         "index_comparison": index_summary(
             [result.comparison for result in results], settings.retrieval_top_k
         ),
@@ -124,7 +137,7 @@ def build_report(
                 [result.model_seconds for result in results if result.model_seconds is not None]
             ),
         },
-        "threshold_sweep": threshold_sweep(retrievals, run.max_k),
+        "threshold_sweep": None if hybrid else threshold_sweep(retrievals, run.max_k),
         "questions": [_question(result, settings.retrieval_top_k) for result in results],
     }
 
@@ -159,10 +172,13 @@ def summary_lines(report: Json) -> list[str]:
     )
     chunks = sum(document["chunks"] for document in data["documents"])
     at_k = retrieval["at_k"]
+    hybrid = report.get("hybrid_search")
     lines = [
         f"{report['run']['mode'].replace('_', ' ').capitalize()}: {questions['total']} questions "
         f"({categories}) over {len(data['documents'])} documents in {chunks} chunks.",
-        f"Retrieval, for the {retrieval['questions']} questions with expected facts:",
+        _search_mode(report["config"]),
+        f"Retrieval, for the {retrieval['questions']} questions with expected facts"
+        + (", over the passages above the minimum similarity:" if hybrid else ":"),
         "  a passage states a fact: "
         + ", ".join(f"top {k} {_fraction(values['hit'])}" for k, values in at_k.items()),
         "  passages state every fact: "
@@ -172,10 +188,24 @@ def summary_lines(report: Json) -> list[str]:
         f"every fact kept for {_fraction(current['with_facts']['kept_all_facts'])}, "
         f"{_fraction(current['with_facts']['declined'])} declined; "
         f"{_fraction(current['without_facts']['declined'])} questions without facts declined.",
-        f"The rules pick top {recommendation['top_k']} and minimum similarity "
-        f"{recommendation['min_similarity']}. The weakest passage needed scored "
-        f"{recommendation['lowest_needed_similarity']}; the best passage for a question "
-        f"without facts scored {recommendation['highest_similarity_without_facts']}.",
+    ]
+    if recommendation is not None:
+        lines.append(
+            f"The rules pick top {recommendation['top_k']} and minimum similarity "
+            f"{recommendation['min_similarity']}. The weakest passage needed scored "
+            f"{recommendation['lowest_needed_similarity']}; the best passage for a question "
+            f"without facts scored {recommendation['highest_similarity_without_facts']}."
+        )
+    if hybrid is not None:
+        lines.append(
+            f"Keyword search: passages for {_fraction(hybrid['with_keyword_matches'])} "
+            f"questions, {hybrid['keyword_matches']} in all, {hybrid['keyword_dropped']} of them "
+            "below the minimum similarity; evidence found only by keywords "
+            f"{_fraction(hybrid['evidence_from_keywords_only'])}"
+        )
+        if hybrid["rerank_failed"] is not None:
+            lines.append(f"Reranker failed: {_fraction(hybrid['rerank_failed'])}")
+    lines += [
         "Chunks read by: "
         + "; ".join(
             f"{mode} search {', '.join(f'{plan} ({count})' for plan, count in plans.items())}"
@@ -232,10 +262,48 @@ def compare_reports(expected: Json, actual: Json) -> list[str]:
     return differences
 
 
+def _search_mode(config: Json) -> str:
+    # Results from before Phase 7 have no retrieval mode: they searched by meaning only.
+    mode = config.get("retrieval_mode", "vector")
+    if mode == "vector":
+        return "Search mode: vector (by meaning)."
+    described = (
+        f"by meaning and by keywords, {config['retrieval_candidates']} candidates each, "
+        f"fused with RRF k {config['rrf_k']}"
+    )
+    if mode == "hybrid_rerank":
+        described += f", reranked by {config['reranker_model']}"
+    return f"Search mode: {mode} ({described})."
+
+
+def _hybrid_summary(results: Sequence[QuestionResult], top_k: int, reranked: bool) -> Json:
+    """What hybrid search did over all the questions."""
+    details = [result.hybrid for result in results if result.hybrid is not None]
+    # In the hybrid modes, the passages judged are already above the minimum similarity, so
+    # the first `top_k` are the evidence.
+    evidence = [
+        passage.passage.ranking
+        for result in results
+        for passage in result.retrieval.passages[:top_k]
+    ]
+    return {
+        "questions": len(details),
+        "with_keyword_matches": count_true(detail.keyword_matches > 0 for detail in details),
+        "keyword_matches": sum(detail.keyword_matches for detail in details),
+        "keyword_dropped": sum(detail.keyword_dropped for detail in details),
+        "evidence_from_keywords_only": count_true(
+            ranking is not None and ranking.vector_rank is None for ranking in evidence
+        ),
+        "rerank_failed": (
+            count_true(detail.rerank_failed is True for detail in details) if reranked else None
+        ),
+    }
+
+
 def _question(result: QuestionResult, top_k: int) -> Json:
     retrieval = result.retrieval
     question = retrieval.question
-    return {
+    summary: Json = {
         "id": question.id,
         "category": question.category.value,
         "question": question.question,
@@ -244,6 +312,15 @@ def _question(result: QuestionResult, top_k: int) -> Json:
         "facts_found_in_top_k": sorted(retrieval.facts_found(top_k)),
         "index_order_matches_exact": result.comparison.index == result.comparison.exact,
         "evidence_matches_search": result.evidence_matches,
+    }
+    if result.hybrid is not None:
+        summary["hybrid_search"] = {
+            "candidates": result.hybrid.candidates,
+            "keyword_matches": result.hybrid.keyword_matches,
+            "keyword_dropped": result.hybrid.keyword_dropped,
+            "rerank_failed": result.hybrid.rerank_failed,
+        }
+    return summary | {
         "passages": [passage.to_json() for passage in retrieval.passages],
         "answer": result.score.to_json(),
     }

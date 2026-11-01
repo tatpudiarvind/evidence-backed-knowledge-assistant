@@ -1,6 +1,7 @@
-"""Running the evaluation (P5-02): the runner on the real corpus with stand-in models, and the
-results file it leads to."""
+"""Running the evaluation (P5-02, and Phase 7's hybrid modes): the runner on the real corpus with
+stand-in models, and the results file it leads to."""
 
+import copy
 import hashlib
 import json
 import math
@@ -18,12 +19,19 @@ from app.cli import EVALUATION_DIR
 from app.domain.questions import AbstentionReason, AnswerMode
 from app.evaluation.corpus import CorpusDocument, build_document, load_corpus
 from app.evaluation.dataset import EvalQuestion, load_questions, questions_sha256
-from app.evaluation.report import FORMAT_VERSION, build_report, summary_lines, write_report
+from app.evaluation.report import (
+    FORMAT_VERSION,
+    build_report,
+    compare_reports,
+    summary_lines,
+    write_report,
+)
 from app.evaluation.runner import EvaluationError, chunk_access, max_k, run_evaluation
 from app.providers.embeddings import EmbeddingUnavailableError
 from tests.support import (
     PDF_MIME,
     HashingEmbeddings,
+    LengthReranker,
     ScriptedLanguageModel,
     hashed_vector,
     make_settings,
@@ -151,6 +159,30 @@ def test_a_model_that_does_not_reply_stops_the_run_before_the_database() -> None
     assert len(model.prompts) == 1
 
 
+@pytest.mark.parametrize(
+    "reranker", [None, LengthReranker(fail=True)], ids=["none given", "not downloaded"]
+)
+def test_an_unavailable_reranker_stops_the_run_before_the_database(
+    reranker: LengthReranker | None,
+) -> None:
+    # Otherwise every question would quietly keep the fused order.
+    with pytest.raises(
+        EvaluationError,
+        match=re.escape(
+            "The reranker isn't available. Download it with "
+            "`python -m app.cli download-reranker-model`."
+        ),
+    ):
+        run_evaluation(
+            make_settings(retrieval_mode="hybrid_rerank"),
+            [],
+            [],
+            embeddings=HashingEmbeddings(),
+            language_model=None,
+            reranker=reranker,
+        )
+
+
 @pytest.mark.integration
 def test_the_evaluation_indexes_the_corpus_and_asks_every_question(
     database_url: str, tmp_path: Path
@@ -231,6 +263,102 @@ def test_the_evaluation_indexes_the_corpus_and_asks_every_question(
     assert lines[0].startswith(f"Retrieval only: {len(questions)} questions (")
     assert any(line.startswith("Search-only answers: ") for line in lines)
     assert not any(line.startswith("Forbidden text") for line in lines)
+    assert lines[-1] == f"Evidence matches the search: {len(questions)}/{len(questions)}"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("mode", ["hybrid", "hybrid_rerank"])
+def test_the_hybrid_modes_judge_the_passages_the_app_ranks(
+    database_url: str, tmp_path: Path, mode: str
+) -> None:
+    documents = load_corpus(EVALUATION_DIR / "corpus")
+    questions = load_questions(EVALUATION_DIR / "questions.jsonl")
+    settings = make_settings(
+        database_url=database_url,
+        storage_dir=tmp_path / "storage",
+        retrieval_min_similarity=0.0,
+        retrieval_mode=mode,
+    )
+    reranked = mode == "hybrid_rerank"
+    reranker = LengthReranker() if reranked else None
+
+    run = run_evaluation(
+        settings,
+        documents,
+        questions,
+        embeddings=DistinctEmbeddings(),
+        language_model=None,
+        reranker=reranker,
+    )
+
+    for result in run.results:
+        question_id = result.retrieval.question.id
+        hybrid = result.hybrid
+        assert hybrid is not None, question_id
+        # The search-only answer lists the evidence the evaluation ranked, in the same order.
+        assert result.evidence_matches, question_id
+        assert hybrid.rerank_failed is (False if reranked else None), question_id
+        assert 0 <= hybrid.keyword_dropped <= hybrid.keyword_matches, question_id
+        assert hybrid.keyword_matches <= settings.retrieval_candidates, question_id
+        passages = [judged.passage for judged in result.retrieval.passages]
+        assert 0 < len(passages) <= min(10, hybrid.candidates), question_id
+        rankings = [passage.ranking for passage in passages]
+        assert all(
+            ranking is not None
+            and ranking.fused_score is not None
+            and (ranking.vector_rank is not None or ranking.keyword_rank is not None)
+            for ranking in rankings
+        ), question_id
+        if reranked:
+            scores = [ranking.rerank_score for ranking in rankings]
+            assert scores == [float(len(passage.text)) for passage in passages], question_id
+            assert scores == sorted(scores, reverse=True), question_id
+        else:
+            fused = [ranking.fused_score for ranking in rankings]
+            assert fused == sorted(fused, reverse=True), question_id
+            assert all(ranking.rerank_score is None for ranking in rankings), question_id
+    assert any(result.hybrid and result.hybrid.keyword_matches for result in run.results)
+    if reranker is not None:
+        assert reranker.calls[0] == ("A warm-up question?", ["A warm-up passage."])
+        # Each question twice: for the evaluation's ranking, and for the answer.
+        assert len(reranker.calls) == 1 + 2 * len(questions)
+
+    report = build_report(
+        run,
+        command=f"python -m app.cli evaluate --retrieval-mode {mode}",
+        questions_sha256=questions_sha256(EVALUATION_DIR / "questions.jsonl"),
+    )
+
+    assert report["config"]["retrieval_mode"] == mode
+    assert report["config"]["retrieval_candidates"] == settings.retrieval_candidates
+    assert report["config"]["rrf_k"] == settings.rrf_k
+    # The thresholds were tried on passages ranked by meaning alone; here they'd mislead.
+    assert report["recommendation"] is None
+    assert report["threshold_sweep"] is None
+    summary = report["hybrid_search"]
+    assert summary["questions"] == len(questions)
+    assert summary["keyword_matches"] == sum(
+        result.hybrid.keyword_matches for result in run.results if result.hybrid
+    )
+    assert summary["rerank_failed"] == (
+        {"count": 0, "of": len(questions), "share": 0.0} if reranked else None
+    )
+    for question in report["questions"]:
+        assert set(question["hybrid_search"]) == {
+            "candidates",
+            "keyword_matches",
+            "keyword_dropped",
+            "rerank_failed",
+        }
+        for passage in question["passages"]:
+            assert {"vector_rank", "keyword_rank", "fused_score", "rerank_score"} <= set(passage)
+    assert compare_reports(report, copy.deepcopy(report)) == []
+    lines = summary_lines(report)
+    assert lines[1].startswith(f"Search mode: {mode} (by meaning and by keywords, ")
+    assert lines[2].endswith(", over the passages above the minimum similarity:")
+    assert any(line.startswith("Keyword search: passages for ") for line in lines)
+    assert any(line.startswith("Reranker failed: ") for line in lines) is reranked
+    assert not any(line.startswith("The rules pick") for line in lines)
     assert lines[-1] == f"Evidence matches the search: {len(questions)}/{len(questions)}"
 
 

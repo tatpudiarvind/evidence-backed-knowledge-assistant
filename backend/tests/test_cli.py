@@ -1,10 +1,10 @@
-"""The maintenance command line (P3-05, P5-02), with stand-ins for the download and the
-models."""
+"""The maintenance command line (P3-05, P5-02, and Phase 7's reranker and retrieval modes), with
+stand-ins for the download and the models."""
 
 import json
 import sys
 import types
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -18,9 +18,11 @@ from app.domain.indexing import EMBEDDING_DIMENSION
 from app.evaluation.corpus import load_corpus, read_blocks
 from app.evaluation.dataset import questions_sha256
 from app.providers.embeddings import EmbeddingUnavailableError
+from app.providers.rerankers import RerankerUnavailableError
 from tests.support import (
     UNREACHABLE_DATABASE_URL,
     HashingEmbeddings,
+    LengthReranker,
     ScriptedLanguageModel,
     make_settings,
 )
@@ -35,7 +37,7 @@ QUESTION: dict[str, Any] = {
 
 
 class FakeHub:
-    """Stands in for huggingface_hub, truststore, and the model, recording how they're used."""
+    """Stands in for huggingface_hub, truststore, and the models, recording how they're used."""
 
     def __init__(self, snapshot: Path) -> None:
         self.snapshot = snapshot
@@ -44,6 +46,7 @@ class FakeHub:
         self.downloads: list[tuple[str, dict[str, Any]]] = []
         self.download_error: Exception | None = None
         self.loaded: list[Settings] = []
+        self.loaded_rerankers: list[Settings] = []
         self.model_available = True
 
     def configure(self, model_dir: Path, *, offline: bool) -> None:
@@ -67,6 +70,15 @@ class FakeHub:
             raise EmbeddingUnavailableError("synthetic-model")
         return [0.0] * EMBEDDING_DIMENSION
 
+    def rerankers(self, settings: Settings) -> "FakeHub":
+        self.loaded_rerankers.append(settings)
+        return self
+
+    def score(self, question: str, texts: Sequence[str]) -> list[float]:
+        if not self.model_available:
+            raise RerankerUnavailableError("synthetic-reranker")
+        return [0.25] * len(texts)
+
 
 @pytest.fixture
 def hub(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeHub:
@@ -83,6 +95,7 @@ def hub(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> FakeHub:
     monkeypatch.setitem(sys.modules, "truststore", trust_module)
     monkeypatch.setattr(cli, "configure_hugging_face", fake.configure)
     monkeypatch.setattr(cli, "SentenceTransformerEmbeddings", fake.embeddings)
+    monkeypatch.setattr(cli, "CrossEncoderReranker", fake.rerankers)
     return fake
 
 
@@ -117,36 +130,90 @@ def test_downloads_the_pinned_model_then_checks_it_works(
     assert f"makes {EMBEDDING_DIMENSION}-dimensional vectors" in output
 
 
-def test_a_failed_download_is_reported(
+def test_downloads_the_pinned_reranker_then_checks_it_works(
     hub: FakeHub, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    model_dir = tmp_path / "models"
+    settings = make_settings(embedding_model_dir=model_dir)
+
+    assert cli.download_reranker_model(settings) == 0
+
+    # Into the embedding model's folder: one setting says where every model is.
+    assert model_dir.is_dir()
+    assert hub.configured == [(model_dir, False)]
+    assert hub.trust_injected == 1
+    assert hub.downloads == [
+        (
+            "cross-encoder/ms-marco-MiniLM-L6-v2",
+            {
+                "revision": settings.reranker_model_revision,
+                "cache_dir": model_dir,
+                "allow_patterns": cli.MODEL_FILE_PATTERNS,
+                "ignore_patterns": cli.SKIPPED_FILE_PATTERNS,
+                "token": False,
+            },
+        )
+    ]
+    assert hub.loaded_rerankers == [settings]
+    assert hub.loaded == []
+    output = capsys.readouterr().out
+    assert (
+        "Downloading cross-encoder/ms-marco-MiniLM-L6-v2 at revision "
+        f"{settings.reranker_model_revision[:12]} into {model_dir}"
+    ) in output
+    assert "2 files, 10 bytes" in output
+    assert "scores passages, 0.25 for a test pair" in output
+
+
+DOWNLOADS: dict[str, Callable[[Settings], int]] = {
+    "embedding model": cli.download_embedding_model,
+    "reranker": cli.download_reranker_model,
+}
+
+
+@pytest.mark.parametrize("download", DOWNLOADS.values(), ids=list(DOWNLOADS))
+def test_a_failed_download_is_reported(
+    hub: FakeHub,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    download: Callable[[Settings], int],
 ) -> None:
     hub.download_error = OSError("synthetic network failure")
 
-    assert cli.download_embedding_model(make_settings(embedding_model_dir=tmp_path)) == 1
+    assert download(make_settings(embedding_model_dir=tmp_path)) == 1
 
     assert "Download failed: OSError: synthetic network failure" in capsys.readouterr().err
     assert hub.loaded == []
+    assert hub.loaded_rerankers == []
 
 
+@pytest.mark.parametrize("download", DOWNLOADS.values(), ids=list(DOWNLOADS))
 def test_a_model_that_does_not_load_is_reported(
-    hub: FakeHub, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    hub: FakeHub,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    download: Callable[[Settings], int],
 ) -> None:
     hub.model_available = False
 
-    assert cli.download_embedding_model(make_settings(embedding_model_dir=tmp_path)) == 1
+    assert download(make_settings(embedding_model_dir=tmp_path)) == 1
 
     assert "couldn't be loaded" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    ("command", "loaded"),
+    [("download-embedding-model", "loaded"), ("download-reranker-model", "loaded_rerankers")],
+)
 def test_main_runs_the_command_with_the_app_settings(
-    hub: FakeHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    hub: FakeHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str, loaded: str
 ) -> None:
     settings = make_settings(embedding_model_dir=tmp_path)
     monkeypatch.setattr(cli, "get_settings", lambda: settings)
 
-    assert cli.main(["download-embedding-model"]) == 0
+    assert cli.main([command]) == 0
 
-    assert hub.loaded == [settings]
+    assert getattr(hub, loaded) == [settings]
 
 
 def test_main_needs_a_command(capsys: pytest.CaptureFixture[str]) -> None:
@@ -156,6 +223,7 @@ def test_main_needs_a_command(capsys: pytest.CaptureFixture[str]) -> None:
     assert exited.value.code == 2
     error = capsys.readouterr().err
     assert "download-embedding-model" in error
+    assert "download-reranker-model" in error
     assert "evaluate" in error
     assert "compare-results" in error
     assert "write-demo-files" in error
@@ -265,6 +333,50 @@ def test_the_evaluation_database_is_the_apps_with_eval_added() -> None:
 
     assert url.database == "unit_tests_eval"
     assert url.set(database="unit_tests") == make_url(UNREACHABLE_DATABASE_URL)
+
+
+@pytest.mark.parametrize(
+    ("held_out", "with_model", "mode", "name"),
+    [
+        # The files from before Phase 7 keep their names; CI compares with the first.
+        (False, False, "vector", "results/retrieval-only.json"),
+        (False, True, "vector", "results/with-model.json"),
+        (False, False, "hybrid", "results/retrieval-only-hybrid.json"),
+        (False, True, "hybrid_rerank", "results/with-model-hybrid-rerank.json"),
+        (True, False, "vector", "results/held-out/retrieval-only.json"),
+        (True, True, "hybrid", "results/held-out/with-model-hybrid.json"),
+    ],
+)
+def test_each_question_set_model_and_mode_has_its_own_results_file(
+    held_out: bool, with_model: bool, mode: Any, name: str
+) -> None:
+    assert cli._default_output(held_out, with_model, mode) == cli.EVALUATION_DIR / name
+
+
+@pytest.mark.parametrize("option", ["--questions", "--corpus"])
+def test_the_held_out_set_is_used_whole(
+    unit_settings: Settings, tmp_path: Path, capsys: pytest.CaptureFixture[str], option: str
+) -> None:
+    with pytest.raises(SystemExit) as exited:
+        cli.main(["evaluate", "--held-out", option, str(tmp_path)])
+
+    assert exited.value.code == 2
+    assert (
+        "--held-out chooses the questions and the corpus, so give one or the other"
+        in capsys.readouterr().err
+    )
+
+
+def test_an_unknown_retrieval_mode_is_refused(
+    unit_settings: Settings, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exited:
+        cli.main(["evaluate", "--retrieval-mode", "bm25"])
+
+    assert exited.value.code == 2
+    error = capsys.readouterr().err
+    assert "--retrieval-mode" in error
+    assert "invalid choice: 'bm25'" in error
 
 
 def test_the_evaluation_only_uses_a_database_named_for_it(
@@ -385,4 +497,105 @@ def test_evaluate_reports_an_unavailable_embedding_model(
     assert cli.main(["evaluate", *arguments]) == 1
 
     assert "The embedding model isn't available" in capsys.readouterr().err
+    assert not (tmp_path / "results.json").exists()
+
+
+HYBRID_CONFIG = (
+    "retrieval_mode",
+    "retrieval_candidates",
+    "rrf_k",
+    "reranker_model",
+    "reranker_model_revision",
+)
+
+
+@pytest.mark.integration
+def test_evaluate_records_a_hybrid_mode_set_in_the_settings(
+    test_database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = make_settings(
+        database_url=test_database_url, retrieval_min_similarity=0.0, retrieval_mode="hybrid"
+    )
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "SentenceTransformerEmbeddings", lambda _: HashingEmbeddings())
+    arguments = write_evaluation_data(tmp_path, QUESTION)
+
+    assert cli.main(["evaluate", *arguments]) == 0
+
+    report = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+    # The command repeats the run, whether the mode came from the settings or an option.
+    assert report["run"]["command"] == "python -m app.cli evaluate --retrieval-mode hybrid"
+    assert {key: report["config"][key] for key in HYBRID_CONFIG} == {
+        "retrieval_mode": "hybrid",
+        "retrieval_candidates": settings.retrieval_candidates,
+        "rrf_k": settings.rrf_k,
+        "reranker_model": None,
+        "reranker_model_revision": None,
+    }
+    assert report["recommendation"] is None
+    assert report["hybrid_search"]["questions"] == 1
+    assert report["hybrid_search"]["rerank_failed"] is None
+    assert (
+        f"Search mode: hybrid (by meaning and by keywords, {settings.retrieval_candidates} "
+        f"candidates each, fused with RRF k {settings.rrf_k})."
+    ) in capsys.readouterr().out
+
+
+@pytest.mark.integration
+def test_evaluate_reranks_with_the_pinned_reranker(
+    test_database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    settings = make_settings(database_url=test_database_url, retrieval_min_similarity=0.0)
+    reranker = LengthReranker()
+    given: list[Settings] = []
+
+    def make_reranker(run_settings: Settings) -> LengthReranker:
+        given.append(run_settings)
+        return reranker
+
+    monkeypatch.setattr(cli, "get_settings", lambda: settings)
+    monkeypatch.setattr(cli, "SentenceTransformerEmbeddings", lambda _: HashingEmbeddings())
+    monkeypatch.setattr(cli, "CrossEncoderReranker", make_reranker)
+    arguments = write_evaluation_data(tmp_path, QUESTION)
+
+    assert cli.main(["evaluate", "--retrieval-mode", "hybrid_rerank", *arguments]) == 0
+
+    report = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
+    assert report["run"]["command"] == "python -m app.cli evaluate --retrieval-mode hybrid_rerank"
+    assert [run_settings.retrieval_mode for run_settings in given] == ["hybrid_rerank"]
+    assert report["config"]["retrieval_mode"] == "hybrid_rerank"
+    assert report["config"]["reranker_model"] == "cross-encoder/ms-marco-MiniLM-L6-v2"
+    assert report["config"]["reranker_model_revision"] == settings.reranker_model_revision
+    assert report["hybrid_search"]["rerank_failed"] == {"count": 0, "of": 1, "share": 0.0}
+    # The warm-up, then the question twice: for the evaluation's ranking and for the answer.
+    assert len(reranker.calls) == 3
+    output = capsys.readouterr().out
+    assert ", reranked by cross-encoder/ms-marco-MiniLM-L6-v2)." in output
+    assert "Reranker failed: 0/1" in output
+
+
+@pytest.mark.integration
+def test_evaluate_reports_an_unavailable_reranker(
+    test_database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "get_settings", lambda: make_settings(database_url=test_database_url))
+    monkeypatch.setattr(cli, "SentenceTransformerEmbeddings", lambda _: HashingEmbeddings())
+    monkeypatch.setattr(cli, "CrossEncoderReranker", lambda _: LengthReranker(fail=True))
+    arguments = write_evaluation_data(tmp_path, QUESTION)
+
+    assert cli.main(["evaluate", "--retrieval-mode", "hybrid_rerank", *arguments]) == 1
+
+    assert (
+        "The reranker isn't available. Download it with "
+        "`python -m app.cli download-reranker-model`."
+    ) in capsys.readouterr().err
     assert not (tmp_path / "results.json").exists()

@@ -1,4 +1,5 @@
-"""Helpers shared by the tests: settings, sample files, API calls, and a stand-in embedder."""
+"""Helpers shared by the tests: settings, sample files, API calls, and stand-ins for the
+models."""
 
 import hashlib
 import io
@@ -25,6 +26,7 @@ from app.evaluation.files import Heading as Heading
 from app.evaluation.files import docx_bytes as docx_bytes
 from app.evaluation.files import pdf_bytes as pdf_bytes
 from app.providers.llm import Generation, LanguageModelUnavailableError
+from app.providers.rerankers import RerankerUnavailableError
 from app.services.ingestion import DocumentIndexer
 
 CSRF_HEADERS = {"X-CSRF-Protection": "1"}
@@ -48,6 +50,8 @@ def make_settings(**overrides: Any) -> Settings:
         "question_cleanup_enabled": False,
         # Tests make many requests from one client; the rate limit tests turn the limits on.
         "rate_limits_enabled": False,
+        # Tests of the hybrid modes choose one, so a RETRIEVAL_MODE in the shell changes nothing.
+        "retrieval_mode": "vector",
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -204,6 +208,24 @@ class ScriptedLanguageModel:
         if self._fail or not self._replies:
             raise LanguageModelUnavailableError(self.name)
         return Generation(self._replies.pop(0), self.name)
+
+
+class LengthReranker:
+    """A stand-in reranker that scores longer passages higher, and records what it scored.
+
+    With `fail=True`, it acts like a reranker that hasn't been downloaded.
+    """
+
+    def __init__(self, *, name: str = "length-reranker", fail: bool = False) -> None:
+        self.name = name
+        self.calls: list[tuple[str, list[str]]] = []
+        self.fail = fail
+
+    def score(self, question: str, texts: Sequence[str]) -> list[float]:
+        self.calls.append((question, list(texts)))
+        if self.fail:
+            raise RerankerUnavailableError(self.name)
+        return [float(len(text)) for text in texts]
 
 
 def ask(client: TestClient, workspace_id: str, text: str) -> Response:

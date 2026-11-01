@@ -2,7 +2,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any, TypeVar
 
-from sqlalchemy import Select, delete, func, insert, select, text
+from sqlalchemy import ColumnElement, Row, Select, delete, func, insert, select, text
 from sqlalchemy.orm import Session
 
 from app.db.models import Document, DocumentChunk, WorkspaceMembership
@@ -68,19 +68,7 @@ def search_statement(
 ) -> Select[Any]:
     """The query behind `search_workspace`. The evaluation also inspects its query plan."""
     distance = DocumentChunk.embedding.cosine_distance(list(vector))
-    statement = _ready_for_member(
-        select(
-            DocumentChunk.id,
-            DocumentChunk.document_id,
-            Document.display_name,
-            DocumentChunk.text,
-            DocumentChunk.page_number,
-            DocumentChunk.section,
-            distance.label("distance"),
-        ),
-        workspace_id,
-        user_id,
-    )
+    statement = _ready_for_member(_passage_columns(distance), workspace_id, user_id)
     return statement.order_by(distance).limit(limit)
 
 
@@ -100,18 +88,70 @@ def search_workspace(
     """
     session.execute(text("SET LOCAL hnsw.iterative_scan = strict_order"))
     rows = session.execute(search_statement(workspace_id, user_id, vector, limit))
-    return [
-        Passage(
-            chunk_id=row.id,
-            document_id=row.document_id,
-            document_name=row.display_name,
-            text=row.text,
-            page_number=row.page_number,
-            section=row.section,
-            similarity=1.0 - float(row.distance),
-        )
-        for row in rows
-    ]
+    return [_passage(row) for row in rows]
+
+
+def keyword_search_statement(
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    query: str,
+    vector: Sequence[float],
+    limit: int,
+) -> Select[Any]:
+    """The query behind `keyword_search`."""
+    terms = func.websearch_to_tsquery("english", query)
+    rank = func.ts_rank(DocumentChunk.search_vector, terms)
+    distance = DocumentChunk.embedding.cosine_distance(list(vector))
+    statement = _ready_for_member(_passage_columns(distance), workspace_id, user_id)
+    return (
+        statement.where(DocumentChunk.search_vector.bool_op("@@")(terms))
+        .order_by(rank.desc(), distance, DocumentChunk.id)
+        .limit(limit)
+    )
+
+
+def keyword_search(
+    session: Session,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    query: str,
+    vector: Sequence[float],
+    limit: int,
+) -> list[Passage]:
+    """The chunks of a workspace's ready documents that contain any of `query`'s words.
+
+    `query` comes from `keyword_query`. Passages are ranked by `ts_rank` (D-81), so those with
+    more of the words come first; ties go to the passage closer to `vector`, the question's
+    embedding. Each passage's similarity is its cosine similarity to `vector`, as in
+    `search_workspace`. Only a member's search finds anything, and a query made only of stop
+    words finds nothing.
+    """
+    rows = session.execute(keyword_search_statement(workspace_id, user_id, query, vector, limit))
+    return [_passage(row) for row in rows]
+
+
+def _passage_columns(distance: ColumnElement[Any]) -> Select[Any]:
+    return select(
+        DocumentChunk.id,
+        DocumentChunk.document_id,
+        Document.display_name,
+        DocumentChunk.text,
+        DocumentChunk.page_number,
+        DocumentChunk.section,
+        distance.label("distance"),
+    )
+
+
+def _passage(row: Row[Any]) -> Passage:
+    return Passage(
+        chunk_id=row.id,
+        document_id=row.document_id,
+        document_name=row.display_name,
+        text=row.text,
+        page_number=row.page_number,
+        section=row.section,
+        similarity=1.0 - float(row.distance),
+    )
 
 
 def workspace_has_indexed_chunks(

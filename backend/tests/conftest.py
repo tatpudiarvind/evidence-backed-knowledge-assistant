@@ -4,7 +4,7 @@ Unit tests need nothing running. Integration tests (marked `integration`) use a 
 PostgreSQL database whose name must end in `_test`; it is created and migrated if needed.
 Set TEST_DATABASE_URL to point elsewhere. Without a reachable server those tests are skipped,
 unless TEST_DATABASE_REQUIRED=1 (as in CI), which makes them fail instead. Tests marked `model`
-use the downloaded embedding model and are skipped without it.
+use a downloaded model, the embedding model or the reranker, and are skipped without it.
 """
 
 import os
@@ -26,6 +26,7 @@ from app.db.maintenance import create_database_if_missing, empty_tables, run_ale
 from app.factory import create_app
 from app.providers.embeddings import EmbeddingProvider
 from app.providers.llm import LanguageModel
+from app.providers.rerankers import Reranker
 from tests.support import (
     HashingEmbeddings,
     Workspace,
@@ -37,8 +38,26 @@ from tests.support import (
 DEFAULT_TEST_DATABASE_URL = "postgresql+psycopg://knowledge_assistant:local_dev_only@127.0.0.1:5432/knowledge_assistant_test"
 # The cheapest Argon2 parameters keep tests fast; the app itself uses the library defaults.
 CHEAP_PASSWORDS = PasswordHashing(PasswordHasher.from_parameters(profiles.CHEAPEST))
+# What configure_hugging_face sets for the process.
+HF_VARIABLES = (
+    "HF_HOME",
+    "HF_HUB_DISABLE_TELEMETRY",
+    "HF_HUB_DISABLE_XET",
+    "HF_HUB_DISABLE_SYMLINKS_WARNING",
+    "HF_HUB_OFFLINE",
+    "HF_HUB_DISABLE_PROGRESS_BARS",
+)
 
 AppFactory = Callable[..., FastAPI]
+
+
+@pytest.fixture
+def clean_hf_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Remove Hugging Face settings for one test, and put back afterwards whatever was there."""
+    for name in HF_VARIABLES:
+        # Setting first makes monkeypatch restore the variable, even if it didn't exist.
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
 
 
 @pytest.fixture(scope="session")
@@ -78,7 +97,8 @@ def make_app(storage_dir: Path) -> Iterator[AppFactory]:
 
     They embed text with `HashingEmbeddings` unless given another provider, have no language
     model unless given one, and their background threads stay off unless their settings turn
-    them on.
+    them on. In `hybrid_rerank` mode without a given reranker, they get the real one, which
+    loads on first use.
     """
     apps: list[FastAPI] = []
 
@@ -86,6 +106,7 @@ def make_app(storage_dir: Path) -> Iterator[AppFactory]:
         *,
         embeddings: EmbeddingProvider | None = None,
         language_model: LanguageModel | None = None,
+        reranker: Reranker | None = None,
         **overrides: Any,
     ) -> FastAPI:
         overrides.setdefault("storage_dir", storage_dir)
@@ -94,6 +115,7 @@ def make_app(storage_dir: Path) -> Iterator[AppFactory]:
             passwords=CHEAP_PASSWORDS,
             embeddings=embeddings or HashingEmbeddings(),
             language_model=language_model,
+            reranker=reranker,
         )
         apps.append(app)
         return app

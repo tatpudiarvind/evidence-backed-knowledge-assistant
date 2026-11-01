@@ -5,6 +5,8 @@ from typing import Literal, Self
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.domain.retrieval import RetrievalMode
+
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 # Host runs read the repository's `.env`, the same file Docker Compose uses. In the container
 # image this resolves to `/`, where no `.env` exists, so Compose's environment applies instead.
@@ -93,6 +95,20 @@ class Settings(BaseSettings):
     # Passages less similar to the question than this don't count as evidence. Set by the
     # evaluation's rule; it keeps out off-topic questions, not on-topic ones nothing answers.
     retrieval_min_similarity: float = Field(default=0.5, ge=0.0, le=1.0)
+    # How passages are found (Phase 7, D-81): see app/domain/retrieval.py. "vector" is the
+    # search of Phases 4 to 6.
+    retrieval_mode: RetrievalMode = "vector"
+    # How many passages each search returns for fusion, in the hybrid modes.
+    retrieval_candidates: int = Field(default=20, ge=1, le=100)
+    # The k in reciprocal rank fusion's 1 / (k + rank), as in the paper that introduced it.
+    rrf_k: int = Field(default=60, ge=1, le=1000)
+    # The cross-encoder of "hybrid_rerank", kept in EMBEDDING_MODEL_DIR. Download it once with
+    # `python -m app.cli download-reranker-model`. It was trained on MS MARCO, whose terms allow
+    # non-commercial research use only (D-81); BAAI/bge-reranker-base is MIT-licensed.
+    reranker_model_name: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
+    reranker_model_revision: str = Field(
+        default="233902d25c440f23af6f7d6e94d2946bac0bee0a", pattern=r"^[0-9a-f]{40}$"
+    )
     # The most passage text the model is shown for one question, in characters.
     answer_context_characters: int = Field(default=6000, ge=1000, le=50_000)
     # A background thread in the API process deletes questions three days after they're asked.
@@ -143,6 +159,13 @@ class Settings(BaseSettings):
                 "ANSWER_CONTEXT_CHARACTERS is too large for OLLAMA_CONTEXT_TOKENS: lower the "
                 "first or raise the second"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_retrieval_candidates(self) -> Self:
+        # The hybrid modes keep RETRIEVAL_TOP_K of the candidates, so each search needs as many.
+        if self.retrieval_candidates < self.retrieval_top_k:
+            raise ValueError("RETRIEVAL_CANDIDATES must be at least RETRIEVAL_TOP_K")
         return self
 
 

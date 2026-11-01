@@ -1,6 +1,6 @@
-"""Questions (Phase 4): find the passages closest to a question in a workspace's ready
-documents, have a language model answer from them with citations or decline to, and keep the
-result for three days.
+"""Questions (Phase 4): find a question's evidence in a workspace's ready documents, have a
+language model answer from it with citations or decline to, and keep the result for three days.
+How the evidence is found depends on RETRIEVAL_MODE (Phase 7; see `app.services.retrieval`).
 
 No database transaction stays open while a model runs, which can take a minute or more, so the
 workspace and the cited documents are checked again before the answer is stored.
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.core.metrics import Metrics
 from app.db.models import User
 from app.domain.grounding import build_prompt, check_answer
 from app.domain.questions import (
@@ -27,9 +28,10 @@ from app.domain.questions import (
 )
 from app.providers.embeddings import EmbeddingProvider, EmbeddingUnavailableError, check_vectors
 from app.providers.llm import LanguageModel, LanguageModelUnavailableError
-from app.repositories import chunks as chunk_repository
+from app.providers.rerankers import Reranker
 from app.repositories import documents as document_repository
 from app.repositories import questions as question_repository
+from app.services.retrieval import retrieve
 from app.services.workspaces import require_workspace
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,8 @@ def ask_question(
     settings: Settings,
     embeddings: EmbeddingProvider,
     language_model: LanguageModel | None,
+    reranker: Reranker | None = None,
+    metrics: Metrics | None = None,
 ) -> QuestionRecord:
     """Answer a question from the workspace's documents, or say why it can't be answered."""
     started = time.perf_counter()
@@ -58,17 +62,17 @@ def ask_question(
     session.rollback()
 
     vector = _embed(embeddings, text)
-    passages = chunk_repository.search_workspace(
-        session, workspace_id, user_id, vector, settings.retrieval_top_k
+    retrieved = retrieve(
+        session,
+        workspace_id,
+        user_id,
+        text,
+        vector,
+        settings=settings,
+        reranker=reranker,
+        metrics=metrics,
     )
-    has_documents = bool(passages) or chunk_repository.workspace_has_indexed_chunks(
-        session, workspace_id, user_id
-    )
-    session.rollback()
-    evidence = [
-        passage for passage in passages if passage.similarity >= settings.retrieval_min_similarity
-    ]
-    answer = _answer(text, evidence, has_documents, settings, language_model)
+    answer = _answer(text, retrieved.evidence, retrieved.has_documents, settings, language_model)
 
     require_workspace(session, user, workspace_id)
     cited = {citation.passage.document_id for citation in answer.citations}
@@ -85,13 +89,14 @@ def ask_question(
     session.commit()
     # Never the question's or the answer's text.
     logger.info(
-        "Answered question %s: mode=%s abstention=%s passages=%d evidence=%d citations=%d "
-        "in %.1f s",
+        "Answered question %s: mode=%s abstention=%s retrieval=%s passages=%d evidence=%d "
+        "citations=%d in %.1f s",
         record.id,
         answer.mode.value,
         answer.abstention_reason.value if answer.abstention_reason else "none",
-        len(passages),
-        len(evidence),
+        retrieved.mode,
+        retrieved.candidates,
+        len(retrieved.evidence),
         len(answer.citations),
         time.perf_counter() - started,
     )

@@ -25,14 +25,6 @@ from app.providers.embeddings import (
 )
 from tests.support import hashed_vector, make_settings
 
-HF_VARIABLES = (
-    "HF_HOME",
-    "HF_HUB_DISABLE_TELEMETRY",
-    "HF_HUB_DISABLE_XET",
-    "HF_HUB_DISABLE_SYMLINKS_WARNING",
-    "HF_HUB_OFFLINE",
-    "HF_HUB_DISABLE_PROGRESS_BARS",
-)
 ENCODE_OPTIONS = {"normalize_embeddings": True, "show_progress_bar": False}
 
 
@@ -80,15 +72,6 @@ def library(monkeypatch: pytest.MonkeyPatch) -> FakeLibrary:
     monkeypatch.setitem(sys.modules, "sentence_transformers", fake.module())
     monkeypatch.setattr(embeddings, "configure_hugging_face", fake.configure)
     return fake
-
-
-@pytest.fixture
-def clean_hf_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Remove Hugging Face settings for one test, and put back afterwards whatever was there."""
-    for name in HF_VARIABLES:
-        # Setting first makes monkeypatch restore the variable, even if it didn't exist.
-        monkeypatch.setenv(name, "")
-        monkeypatch.delenv(name)
 
 
 def _settings(model_dir: Path, **overrides: Any) -> Settings:

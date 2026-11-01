@@ -79,6 +79,9 @@ services:
       ANSWER_CONTEXT_CHARACTERS: ${ANSWER_CONTEXT_CHARACTERS:-6000}
       RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-4}
       RETRIEVAL_MIN_SIMILARITY: ${RETRIEVAL_MIN_SIMILARITY:-0.5}
+      RETRIEVAL_MODE: ${RETRIEVAL_MODE:-vector}
+      RETRIEVAL_CANDIDATES: ${RETRIEVAL_CANDIDATES:-20}
+      RRF_K: ${RRF_K:-60}
       QUESTION_CLEANUP_ENABLED: ${QUESTION_CLEANUP_ENABLED:-true}
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
@@ -88,8 +91,10 @@ services:
       - ./backend/alembic.ini:/app/alembic.ini
       # Uploaded files (STORAGE_DIR defaults to /app/storage in the image).
       - document_storage:/app/storage
-      # The embedding model (EMBEDDING_MODEL_DIR defaults to /app/models in the image). Fetch
-      # it once with `docker compose run --rm backend python -m app.cli download-embedding-model`.
+      # The embedding model, and the reranker of RETRIEVAL_MODE=hybrid_rerank
+      # (EMBEDDING_MODEL_DIR defaults to /app/models in the image). Fetch them once with
+      # `docker compose run --rm backend python -m app.cli download-embedding-model`, and
+      # `download-reranker-model` in place of `download-embedding-model` for the reranker.
       - embedding_models:/app/models
     depends_on:
       db:

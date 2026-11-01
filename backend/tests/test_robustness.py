@@ -9,6 +9,9 @@ They show what still holds then:
 - an answer keeps only citations of passages the model was given;
 - odd questions and replies are stored, tidied, or refused, never a server error.
 
+Each test runs in every retrieval mode (P7-06), so that hybrid search and reranking keep all of
+this too; `LengthReranker` stands in for the cross-encoder.
+
 This is evidence of robustness, not proof of security. How often a real model follows planted
 instructions is what the evaluation's injection questions measure (P5-02).
 """
@@ -27,10 +30,12 @@ from app.db.models import WorkspaceMembership
 from app.domain.grounding import SYSTEM_PROMPT, ChatMessage
 from app.domain.indexing import EMBEDDING_DIMENSION
 from app.domain.questions import clean_question
+from app.domain.retrieval import RETRIEVAL_MODES
 from app.providers.llm import Generation
 from tests.support import (
     CSRF_HEADERS,
     HashingEmbeddings,
+    LengthReranker,
     Workspace,
     create_workspace,
     error_code,
@@ -38,6 +43,22 @@ from tests.support import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(params=RETRIEVAL_MODES)
+def make_workspace(
+    request: pytest.FixtureRequest, make_workspace: Callable[..., Workspace]
+) -> Callable[..., Workspace]:
+    """The shared fixture, with apps in each retrieval mode in turn."""
+    mode: str = request.param
+
+    def factory(**overrides: Any) -> Workspace:
+        if mode == "hybrid_rerank":
+            overrides.setdefault("reranker", LengthReranker())
+        return make_workspace(retrieval_mode=mode, **overrides)
+
+    return factory
+
 
 # Planted markers guess at the prompt's random value; the real one is 16 hex digits too.
 FAKE_NONCE = "0123456789abcdef"

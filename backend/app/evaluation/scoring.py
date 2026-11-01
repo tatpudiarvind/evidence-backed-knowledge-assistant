@@ -30,6 +30,17 @@ _DECIMALS = 4
 
 
 @dataclass(frozen=True)
+class HybridRanking:
+    """How hybrid search ranked a passage: its rank in each search, from 1, or None where that
+    search didn't find it; reciprocal rank fusion's score; and the reranker's, if it ran."""
+
+    vector_rank: int | None
+    keyword_rank: int | None
+    fused_score: float | None
+    rerank_score: float | None
+
+
+@dataclass(frozen=True)
 class FoundPassage:
     """A retrieved passage, identified by where it comes from rather than by database IDs."""
 
@@ -38,15 +49,18 @@ class FoundPassage:
     section: str | None
     text: str
     similarity: float
+    # In the hybrid modes.
+    ranking: HybridRanking | None = None
 
     @classmethod
-    def of(cls, passage: Passage) -> Self:
+    def of(cls, passage: Passage, ranking: HybridRanking | None = None) -> Self:
         return cls(
             passage.document_name,
             passage.page_number,
             passage.section,
             passage.text,
             passage.similarity,
+            ranking,
         )
 
 
@@ -63,7 +77,7 @@ class JudgedPassage:
         return bool(self.facts)
 
     def to_json(self) -> Json:
-        return {
+        found: Json = {
             "document": self.passage.document,
             "page": self.passage.page_number,
             "section": self.passage.section,
@@ -71,6 +85,16 @@ class JudgedPassage:
             "expected_source": self.expected_source,
             "facts": sorted(self.facts),
         }
+        ranking = self.passage.ranking
+        if ranking is not None:
+            found |= {
+                "vector_rank": ranking.vector_rank,
+                "keyword_rank": ranking.keyword_rank,
+                # Fused scores are small, such as 1/61 + 1/63, so they keep more decimals.
+                "fused_score": _round_to(ranking.fused_score, 6),
+                "rerank_score": _round_to(ranking.rerank_score, _DECIMALS),
+            }
+        return found
 
 
 def stated_facts(question: EvalQuestion, text: str | None) -> frozenset[int]:
@@ -437,3 +461,7 @@ def _mean(values: Iterable[float]) -> float | None:
 
 def _round(value: float) -> float:
     return round(value, _DECIMALS)
+
+
+def _round_to(value: float | None, decimals: int) -> float | None:
+    return None if value is None else round(value, decimals)
