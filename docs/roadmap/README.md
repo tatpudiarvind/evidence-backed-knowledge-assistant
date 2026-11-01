@@ -333,7 +333,7 @@ Settles PD-10. Tasks: [Phase 10 in the task tracker](../tracker/01-task-tracker.
 
 Implemented as designed below, with these decisions and differences (D-85):
 
-- **Library:** PyJWT 2.10.1 (MIT) with the `crypto` extra, which verifies ID tokens' signatures and claims. The API's own code makes the requests, caches the keys, and applies the OpenID Connect rules; none of it is cryptography.
+- **Library:** PyJWT 2.15.1 (MIT) with the `crypto` extra, which verifies ID tokens' signatures and claims. The API's own code makes the requests, caches the keys, and applies the OpenID Connect rules; none of it is cryptography.
 - **Email of a new account:** a first sign-in creates an account only when the provider's `email` claim is present, well formed, and `email_verified` is the literal `true`, and no other account has it. Otherwise sign-in is refused (`email_not_verified`, `email_in_use`).
 - **Signing out** ends only this app's session; no request goes to the provider.
 - **Not built:** letting a signed-in user link a provider to their own account. Nothing links accounts by email, and with no linking step, a person with a password account who first signs in through a provider is refused (`email_in_use`). The design's sentence on linking below stands as a possible later step.
