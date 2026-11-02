@@ -398,3 +398,76 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down --volumes
+  oidc-keycloak:
+    name: sign-in through Keycloak
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # The production-style stack, with Keycloak added (e2e/compose.keycloak.yaml). Keycloak
+      # shares the API container's network, because the API takes a plain-http issuer only on
+      # localhost. The values below are throwaway, and match e2e/keycloak/realm.json.
+      COMPOSE_FILE: compose.prod.yaml:e2e/compose.keycloak.yaml
+      AUTH_MODE: both
+      OIDC_ISSUER: http://localhost:8180/realms/eka
+      OIDC_CLIENT_ID: eka-web
+      OIDC_CLIENT_SECRET: ci-only-client-value
+      OIDC_REDIRECT_URI: http://localhost:8080/api/v1/auth/oidc/callback
+      OIDC_PROVIDER_NAME: Keycloak
+    steps:
+      - uses: actions/checkout@v7
+      - name: Create .env from the example
+        run: cp .env.example .env
+      - name: Validate the Compose files
+        run: docker compose config --quiet
+      - name: Build and start the stack, with Keycloak
+        run: docker compose up --build --detach --wait --wait-timeout 300 db backend web keycloak
+      - name: Wait for Keycloak
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://localhost:8180/realms/eka/.well-known/openid-configuration \
+              | jq -e '.issuer == "http://localhost:8180/realms/eka"'; then
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Keycloak didn't come up with the expected issuer."
+          docker compose logs --no-color keycloak | tail -n 80
+          exit 1
+      - name: Check the API offers the provider
+        run: |
+          curl --fail --silent http://localhost:8080/api/v1/auth/options | tee /dev/stderr \
+            | jq -e '.provider_name == "Keycloak"'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - name: Install the end-to-end test tools
+        working-directory: e2e
+        run: npm ci --no-audit --no-fund
+      - name: Install Chromium
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+      - name: Run the sign-in tests
+        working-directory: e2e
+        env:
+          E2E_BASE_URL: http://localhost:8080
+          E2E_OIDC: "1"
+        run: npx playwright test tests/oidc.spec.ts
+      - name: Keep the test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: oidc-results
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          if-no-files-found: ignore
+      - name: Show service status and logs
+        if: always()
+        run: |
+          docker compose ps --all
+          docker compose logs --no-color --tail 200
+      - name: Tear down
+        if: always()
+        run: docker compose down --volumes

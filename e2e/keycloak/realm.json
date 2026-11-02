@@ -1,0 +1,55 @@
+{
+  "realm": "eka",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "verifyEmail": false,
+  "clients": [
+    {
+      "clientId": "eka-web",
+      "name": "Evidence-backed Knowledge Assistant (CI)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "ci-only-client-value",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:8080/api/v1/auth/oidc/callback"],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "verified-user",
+      "enabled": true,
+      "email": "verified-user@example.com",
+      "emailVerified": true,
+      "firstName": "Verified",
+      "lastName": "User",
+      "credentials": [{ "type": "password", "value": "ci-only-password", "temporary": false }]
+    },
+    {
+      "username": "unverified-user",
+      "enabled": true,
+      "email": "unverified-user@example.com",
+      "emailVerified": false,
+      "firstName": "Unverified",
+      "lastName": "User",
+      "credentials": [{ "type": "password", "value": "ci-only-password", "temporary": false }]
+    },
+    {
+      "username": "taken-user",
+      "enabled": true,
+      "email": "taken-user@example.com",
+      "emailVerified": true,
+      "firstName": "Taken",
+      "lastName": "User",
+      "credentials": [{ "type": "password", "value": "ci-only-password", "temporary": false }]
+    }
+  ]
+}
