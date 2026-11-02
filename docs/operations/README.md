@@ -237,7 +237,7 @@ Then restart the API. The settings are checked when it starts, so a missing one 
 - **Switching back.** Setting `AUTH_MODE=local` again opens password sign-in. An account made through a provider has no password and can't sign in this way.
 - **Signing out** ends this app's session only. The person may still be signed in at the provider, which can sign them straight back in.
 - **If it fails.** A browser that comes back with `?sign_in_error=` in the address was refused; the API's log names the reason without secrets (`Provider sign-in failed: …`). `provider_unavailable` means the API couldn't read the provider's discovery document or keys, so check that the API's container can reach the provider.
-- **Not tried yet.** This was tested against a stand-in provider on this computer, not against Keycloak or any hosted provider, and not through a browser. The first real sign-in may show a setting this page didn't anticipate.
+- **Tried against Keycloak in CI only.** It was tested against a stand-in provider and, in CI, against Keycloak through a browser (the `sign-in through Keycloak` job, using `e2e/compose.keycloak.yaml`). No hosted provider has been tried, so the first real sign-in may show a setting this page didn't anticipate.
 
 ## Backing up and restoring
 

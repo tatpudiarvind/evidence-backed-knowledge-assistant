@@ -564,7 +564,7 @@ Phases 7 to 10 take up four of the decisions deferred in section 15, and the [ro
 - Let users sign in through one configured OpenID Connect provider, with the API as the client: the authorization code flow with PKCE, ID token checks by a maintained library, and the same session cookie afterwards.
 - Keep local accounts as the default, never link accounts by email, and keep authorization in the app's workspace memberships.
 - The API is the client and checks ID tokens with PyJWT; it keeps only the provider's issuer and the person's subject, a new account needs a verified email, and signing out ends only the app's session. Linking a provider to an existing account isn't built.
-- **Done when:** sign-in through Keycloak works end to end in CI, every refusal case is refused, password sign-in still works, and a security review has been recorded. The last three hold, against a stand-in provider that the tests run; the Keycloak run in CI hasn't been built or tried.
+- **Done when:** sign-in through Keycloak works end to end in CI, every refusal case is refused, password sign-in still works, and a security review has been recorded. All four hold: the refusals and the password sign-in are tested against a stand-in provider, and the Keycloak run in CI passes.
 - **Plan:** [Phase 10 in the roadmap](../roadmap/README.md#phase-10--sign-in-through-an-openid-connect-provider).
 
 ## 11. Quality strategy

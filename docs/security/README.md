@@ -63,7 +63,7 @@ This is the project's own review of the code against the parts of [RFC 9700](htt
 
 Gaps in this review, also under [known gaps](#known-gaps):
 
-- It was tested against a stand-in provider that the tests run on this computer, and by reading the code. It was not run against a real provider (Keycloak, or a hosted one) or in a real browser, so a provider-specific behavior could still surprise it.
+- It was tested against a stand-in provider that the tests run on this computer, by reading the code, and in CI against Keycloak through a real browser, which showed the `Strict` session cookie is sent after the redirect back. It was not run against a hosted provider, so a provider-specific behavior could still surprise it.
 - Whether a browser sends the `Strict` session cookie on the first request after coming back from the provider is untested; the web app's own request to `/auth/me` is same-site, which should carry it.
 - Signing out ends only this app's session, not the one at the provider. The provider's session can sign the person straight back in.
 - There's no refresh token, back-channel logout, or ID token encryption, and the API doesn't ask for or use access tokens.
@@ -216,7 +216,7 @@ None of these matter much while the app runs on one computer for one person. Eac
 | Rate limits live in one process's memory | They reset on restart and can't be shared by several API processes. Sign-in attempts aren't limited per account, and nothing limits how many questions run at once across accounts (R-24) | A shared store such as Redis, or limits in the proxy |
 | Registration says whether an email has an account | It lets someone check which emails are registered, 10 times an hour per address | Turn registration off, or answer every registration the same way and send an email |
 | Local accounts have no email verification, password reset, or second factor | Anyone can register with an address they don't own, if registration is open | `AUTH_MODE=oidc`, which leaves those to the provider |
-| The sign-in through a provider hasn't met a real provider or browser | Tests use a stand-in provider on this computer. A real provider's quirks, and the browser's handling of the cookies, aren't shown | A run against Keycloak or a hosted provider, in a browser |
+| The sign-in through a provider hasn't met a hosted provider | CI shows it working against Keycloak in a browser. A hosted provider's quirks aren't shown | A run against a hosted provider |
 | Provider accounts and password accounts can't be linked, and signing out doesn't sign out of the provider | Someone with a password account who moves to a provider gets a new account, or is refused when the email is taken | An explicit, signed-in linking step, and the provider's logout |
 | No account or workspace deletion | Removing a user means clearing all local data | Endpoints that delete them with their files |
 | No malware scanning or OCR | Uploaded files are stored as they are; scanned PDFs can't be indexed | A scanner before storage; OCR as an indexing step |

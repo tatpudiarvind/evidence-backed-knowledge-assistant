@@ -337,7 +337,7 @@ Implemented as designed below, with these decisions and differences (D-85):
 - **Email of a new account:** a first sign-in creates an account only when the provider's `email` claim is present, well formed, and `email_verified` is the literal `true`, and no other account has it. Otherwise sign-in is refused (`email_not_verified`, `email_in_use`).
 - **Signing out** ends only this app's session; no request goes to the provider.
 - **Not built:** letting a signed-in user link a provider to their own account. Nothing links accounts by email, and with no linking step, a person with a password account who first signs in through a provider is refused (`email_in_use`). The design's sentence on linking below stands as a possible later step.
-- **Not run:** the Keycloak end-to-end test in CI, and a trial in a real browser. The flow is tested against a stand-in provider inside the tests (a loopback server with its own keys), which cannot show a real provider's quirks or the browser's cookie handling.
+- **Keycloak in CI:** the `sign-in through Keycloak` job runs 4 browser tests against Keycloak 26.8.1 and they pass (V-270), including the `Strict` session cookie after the redirect back. **Not run:** a hosted provider, and a trial by hand.
 - **The web app** asks `GET /api/v1/auth/options` what to offer, and falls back to the password form if it can't.
 
 ### Why
@@ -402,7 +402,7 @@ sequenceDiagram
 - A fake provider inside the tests, with its own keys and discovery document, and tokens that must be refused: a bad signature, `alg` set to `none`, the wrong issuer or audience, an expired token, the wrong nonce, a reused or unknown state, and an unknown key.
 - Return paths that try to send the browser elsewhere.
 - The account rules: the same subject signs in to the same account, an email that's already used is refused, and password sign-in to an account without a password is refused.
-- End to end in CI: Keycloak (Apache-2.0) in a container, with a synthetic realm and user, and a browser test through the whole flow. It would also show whether the browser sends the `Strict` session cookie after coming back from the provider. **Not done:** neither this nor the other check has been tried.
+- End to end in CI: Keycloak (Apache-2.0) in a container, with a synthetic realm and user, and a browser test through the whole flow. It would also show whether the browser sends the `Strict` session cookie after coming back from the provider. **Done in CI** (V-270); the by-hand run has not been tried.
 - On this computer, Keycloak can run from its zip with `bin\kc.bat start-dev`, which needs Java ([getting started](https://www.keycloak.org/getting-started/getting-started-zip)). This hasn't been tried yet either.
 - A security review (P10-06) against RFC 9700 and OpenID Connect Core, recorded in the security guide.
 
@@ -423,7 +423,7 @@ sequenceDiagram
 
 ### Done when
 
-- Sign-in through Keycloak works end to end in CI, including the session cookie after the redirect back.
+- Sign-in through Keycloak works end to end in CI, including the session cookie after the redirect back. (Met, V-270.)
 - Every refusal case is refused, and the security review's findings are fixed or recorded.
 - Password sign-in still works in `local` and `both` modes.
 - The security, privacy, API, and operations guides and the specification describe what was built.
