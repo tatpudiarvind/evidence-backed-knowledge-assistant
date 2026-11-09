@@ -22,6 +22,12 @@ The assistant is a portfolio demo of document retrieval, built to run on one com
 
 The tests are in `backend/tests`. The [known gaps](#known-gaps) are at the end.
 
+## Repository changes
+
+Changes to `main` must go through a pull request. The active GitHub branch ruleset requires one approving code-owner review, and [CODEOWNERS](../../.github/CODEOWNERS) assigns every path, including itself, to `@tatpudiarvind`. Other collaborators can merge after that approval. New commits dismiss stale approvals, so the owner must review the updated changes.
+
+The repository administrator has a **pull-request-only** bypass to merge their own PR without self-approval; direct pushes to `main` are not allowed by this bypass. In this personally owned repository, `@tatpudiarvind` is the administrator. The bypass also permits the owner to merge other PRs without a separate approval. Keep the bypass limited to administrators and reassess it if the repository is transferred or its administrative access changes. These requirements are enforced in GitHub settings, not by the CODEOWNERS file alone.
+
 ## Accounts and signing in
 
 - Accounts are local: an email address and a password of 12 to 128 characters. Email addresses aren't verified, and there is no password reset or second factor.
